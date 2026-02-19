@@ -1,0 +1,236 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # 仅在推送标签时触发，如 v1.0.0
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (e.g., v0.1.0)'
+        required: true
+        type: string
+
+jobs:
+  # 构建多平台二进制
+  build:
+    name: Build ${{ matrix.os }}/${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          # Linux
+          - os: ubuntu-latest
+            arch: amd64
+            binary_name: pal-broker-linux-amd64
+          - os: ubuntu-latest
+            arch: arm64
+            binary_name: pal-broker-linux-arm64
+          - os: ubuntu-latest
+            arch: arm
+            binary_name: pal-broker-linux-arm
+            goarch_env: GOARM=7
+          
+          # macOS
+          - os: macos-latest
+            arch: amd64
+            binary_name: pal-broker-darwin-amd64
+          - os: macos-latest
+            arch: arm64
+            binary_name: pal-broker-darwin-arm64
+          
+          # Windows
+          - os: windows-latest
+            arch: amd64
+            binary_name: pal-broker-windows-amd64.exe
+          - os: windows-latest
+            arch: arm64
+            binary_name: pal-broker-windows-arm64.exe
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
+
+      - name: Get version
+        id: get_version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+        shell: bash
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.os == 'windows-latest' && 'windows' || (matrix.os == 'macos-latest' && 'darwin' || 'linux') }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: 0
+        run: |
+          echo "Building for $GOOS/$GOARCH..."
+          go build -ldflags="-s -w -X main.version=${{ steps.get_version.outputs.version }}" \
+            -o ${{ matrix.binary_name }} \
+            ./cmd/pal-broker
+          
+          echo "Binary info:"
+          ls -lh ${{ matrix.binary_name }}
+          
+          # 验证二进制文件
+          if [ "$GOOS" != "windows" ]; then
+            file ${{ matrix.binary_name }}
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.binary_name }}
+          path: ${{ matrix.binary_name }}
+          retention-days: 30
+
+  # 创建 GitHub Release
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: get_version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: Prepare release assets
+        run: |
+          echo "Preparing release assets..."
+          ls -R ./artifacts
+          
+          # 为每个二进制创建 tar.gz 包
+          cd ./artifacts
+          for binary in */*; do
+            if [ -f "$binary" ]; then
+              dir=$(dirname "$binary")
+              base=$(basename "$binary")
+              tar -czvf "${base}.tar.gz" -C "$dir" "$base"
+              echo "Created ${base}.tar.gz"
+            fi
+          done
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          echo "Generating changelog..."
+          cat > ./CHANGELOG.md << 'EOF'
+          # ${{ steps.get_version.outputs.version }}
+          
+          ## 🎉 What's New
+          
+          - Multi-platform builds for Linux, macOS, and Windows
+          - Support for amd64, arm64, and arm architectures
+          - Optimized binary size with CGO disabled
+          
+          ## 📦 Installation
+          
+          ### Linux
+          ```bash
+          # AMD64
+          wget https://github.com/${{ github.repository }}/releases/download/${{ steps.get_version.outputs.version }}/pal-broker-linux-amd64.tar.gz
+          tar -xzf pal-broker-linux-amd64.tar.gz
+          sudo mv pal-broker-linux-amd64 /usr/local/bin/pal-broker
+          
+          # ARM64
+          wget https://github.com/${{ github.repository }}/releases/download/${{ steps.get_version.outputs.version }}/pal-broker-linux-arm64.tar.gz
+          tar -xzf pal-broker-linux-arm64.tar.gz
+          sudo mv pal-broker-linux-arm64 /usr/local/bin/pal-broker
+          ```
+          
+          ### macOS
+          ```bash
+          # AMD64 (Intel)
+          wget https://github.com/${{ github.repository }}/releases/download/${{ steps.get_version.outputs.version }}/pal-broker-darwin-amd64.tar.gz
+          tar -xzf pal-broker-darwin-amd64.tar.gz
+          sudo mv pal-broker-darwin-amd64 /usr/local/bin/pal-broker
+          
+          # ARM64 (Apple Silicon)
+          wget https://github.com/${{ github.repository }}/releases/download/${{ steps.get_version.outputs.version }}/pal-broker-darwin-arm64.tar.gz
+          tar -xzf pal-broker-darwin-arm64.tar.gz
+          sudo mv pal-broker-darwin-arm64 /usr/local/bin/pal-broker
+          ```
+          
+          ### Windows
+          Download the appropriate .exe file for your architecture.
+          
+          ## 🧪 Usage
+          
+          ```bash
+          # Basic usage
+          pal-broker --task <task_id> --provider <claude|codex|copilot>
+          
+          # With custom working directory
+          pal-broker --task <task_id> --provider claude --work-dir /path/to/project
+          
+          # Help
+          pal-broker --help
+          ```
+          
+          ## 📝 Notes
+          
+          - Make sure you have the respective AI CLI installed and configured
+          - See README for detailed documentation
+          EOF
+          cat ./CHANGELOG.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.get_version.outputs.version }}
+          name: Release ${{ steps.get_version.outputs.version }}
+          body_path: ./CHANGELOG.md
+          draft: false
+          prerelease: false
+          files: |
+            ./artifacts/*/*.tar.gz
+            ./artifacts/*/*.exe
+
+  # 通知
+  notify:
+    name: Notify
+    runs-on: ubuntu-latest
+    needs: [build, release]
+    if: always()
+    steps:
+      - name: Generate notification
+        run: |
+          echo "## 🚀 Build & Release Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ github.event.inputs.version || github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Status:** ${{ needs.release.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ needs.release.result }}" == "success" ]; then
+            echo "✅ Release created successfully!" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "📦 Download: https://github.com/${{ github.repository }}/releases" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Release process had issues" >> $GITHUB_STEP_SUMMARY
+          fi
