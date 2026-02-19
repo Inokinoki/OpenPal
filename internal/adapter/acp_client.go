@@ -29,9 +29,9 @@ type ACPError struct {
 
 // ACPSessionUpdate ACP 会话更新通知
 type ACPSessionUpdate struct {
-	SessionID     string      `json:"sessionId"`
-	SessionUpdate string      `json:"sessionUpdate"`
-	Content       ACPContent  `json:"content"`
+	SessionID     string     `json:"sessionId"`
+	SessionUpdate string     `json:"sessionUpdate"`
+	Content       ACPContent `json:"content"`
 }
 
 // ACPContent ACP 内容
@@ -42,13 +42,13 @@ type ACPContent struct {
 
 // ACPClient ACP 客户端
 type ACPClient struct {
-	provider string
-	cmd      *exec.Cmd
-	stdin    io.WriteCloser
-	stdout   io.ReadCloser
+	provider  string
+	cmd       *exec.Cmd
+	stdin     io.WriteCloser
+	stdout    io.ReadCloser
 	sessionID string
-	seq      int64
-	mu       sync.Mutex
+	seq       int64
+	mu        sync.Mutex
 }
 
 // NewACPClient 创建 ACP 客户端
@@ -91,7 +91,7 @@ func NewACPClient(provider string) (*ACPClient, error) {
 func (c *ACPClient) Start() error {
 	// 发送 initialize 请求
 	err := c.sendRequest("initialize", map[string]interface{}{
-		"protocolVersion":  "2025-06-18",
+		"protocolVersion":    "2025-06-18",
 		"clientCapabilities": map[string]interface{}{},
 	}, nil)
 

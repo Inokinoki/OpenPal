@@ -365,10 +365,10 @@ func TestAdapterCommandBuilder(t *testing.T) {
 // TestAdapterCapabilities 测试适配器能力
 func TestAdapterCapabilities(t *testing.T) {
 	tests := []struct {
-		name            string
-		adapter         Adapter
-		wantACP         bool
-		wantJSONStream  bool
+		name             string
+		adapter          Adapter
+		wantACP          bool
+		wantJSONStream   bool
 		wantCapabilities []string
 	}{
 		{

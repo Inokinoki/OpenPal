@@ -32,19 +32,19 @@ func (a *CodexAdapterPure) Start() error {
 // BuildCommand 构建命令
 func (a *CodexAdapterPure) BuildCommand(task string) *exec.Cmd {
 	args := []string{"exec"}
-	
+
 	// 检查是否支持 --json
 	if a.supportsJSON() {
 		args = append(args, "--json")
 	}
-	
+
 	// 如果有 thread_id，恢复会话
 	if a.threadID != "" {
 		args = append(args, "resume", "--last")
 	}
-	
+
 	args = append(args, task)
-	
+
 	cmd := exec.Command("codex", args...)
 	cmd.Dir = a.config.WorkDir
 	return cmd
@@ -87,16 +87,16 @@ func (a *CodexAdapterPure) ParseOutputLine(line string) map[string]interface{} {
 		if _, ok := msg["type"]; !ok {
 			msg["type"] = "chunk"
 		}
-		
+
 		// 提取 thread_id
 		if id, ok := msg["thread_id"].(string); ok {
 			a.threadID = id
 			a.SaveThreadID(id)
 		}
-		
+
 		return msg
 	}
-	
+
 	// 文本模式
 	return a.parseTextLine(line)
 }
@@ -113,7 +113,7 @@ func (a *CodexAdapterPure) parseTextLine(line string) map[string]interface{} {
 			"thread_id": id,
 		}
 	}
-	
+
 	// 识别文件操作
 	lower := strings.ToLower(line)
 	if strings.Contains(lower, "editing") || strings.Contains(lower, "creating") {
@@ -122,14 +122,14 @@ func (a *CodexAdapterPure) parseTextLine(line string) map[string]interface{} {
 			"content": line,
 		}
 	}
-	
+
 	if strings.Contains(lower, "running") || strings.Contains(lower, "executing") {
 		return map[string]interface{}{
 			"type":    "command",
 			"content": line,
 		}
 	}
-	
+
 	return map[string]interface{}{
 		"type":    "chunk",
 		"content": line,

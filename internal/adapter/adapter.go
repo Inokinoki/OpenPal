@@ -39,7 +39,7 @@ func (c *CLIProcess) Stop() error {
 // Adapter CLI 适配器接口
 type Adapter interface {
 	SupportsACP() bool
-	SupportsJSONStream() bool  // 支持 JSON Stream 输出
+	SupportsJSONStream() bool // 支持 JSON Stream 输出
 	BuildCommand(config *CLIConfig) *exec.Cmd
 	ParseMessage(line string) (map[string]interface{}, error)
 	SendCommand(cmd string, params map[string]interface{}) error
@@ -48,18 +48,18 @@ type Adapter interface {
 
 // Manager 适配器管理器
 type Manager struct {
-	adapter      Adapter
-	acpClient    *ACPClient  // ACP 客户端（如果支持）
-	config       *CLIConfig
-	mode         AdapterMode // ACP 或 Text 模式
+	adapter   Adapter
+	acpClient *ACPClient // ACP 客户端（如果支持）
+	config    *CLIConfig
+	mode      AdapterMode // ACP 或 Text 模式
 }
 
 // AdapterMode 适配器模式
 type AdapterMode string
 
 const (
-	ModeACP  AdapterMode = "acp"   // ACP 协议模式
-	ModeText AdapterMode = "text"  // 文本解析模式
+	ModeACP  AdapterMode = "acp"  // ACP 协议模式
+	ModeText AdapterMode = "text" // 文本解析模式
 )
 
 // NewAdapter 创建适配器
@@ -196,8 +196,8 @@ func (a *ClaudeAdapter) SupportsJSONStream() bool {
 
 func (a *ClaudeAdapter) BuildCommand(config *CLIConfig) *exec.Cmd {
 	args := []string{
-		"-p",  // print mode (非交互)
-		"--output-format", "stream-json",  // JSON stream 输出
+		"-p",                             // print mode (非交互)
+		"--output-format", "stream-json", // JSON stream 输出
 	}
 
 	// 文件参数
@@ -215,7 +215,7 @@ func (a *ClaudeAdapter) BuildCommand(config *CLIConfig) *exec.Cmd {
 
 func (a *ClaudeAdapter) ParseMessage(line string) (map[string]interface{}, error) {
 	// Claude Code 输出为人类可读文本，需要模式匹配解析
-	
+
 	// 尝试解析 JSON（如果 CLI 支持）
 	var msg map[string]interface{}
 	if err := json.Unmarshal([]byte(line), &msg); err == nil {
@@ -231,7 +231,7 @@ func (a *ClaudeAdapter) ParseMessage(line string) (map[string]interface{}, error
 		}
 		return msg, nil
 	}
-	
+
 	// 文本模式匹配
 	parsed := a.parseTextOutput(line)
 	return parsed, nil
@@ -246,28 +246,28 @@ func (a *ClaudeAdapter) parseTextOutput(line string) map[string]interface{} {
 			"content": line,
 		}
 	}
-	
+
 	// 识别文件操作
 	lower := strings.ToLower(line)
-	if strings.Contains(lower, "editing") || 
-	   strings.Contains(lower, "creating") || 
-	   strings.Contains(lower, "deleting") ||
-	   strings.Contains(lower, "reading") {
+	if strings.Contains(lower, "editing") ||
+		strings.Contains(lower, "creating") ||
+		strings.Contains(lower, "deleting") ||
+		strings.Contains(lower, "reading") {
 		return map[string]interface{}{
 			"type":    "file_operation",
 			"content": line,
 		}
 	}
-	
+
 	// 识别命令执行
-	if strings.Contains(lower, "running") || 
-	   strings.Contains(lower, "executing") {
+	if strings.Contains(lower, "running") ||
+		strings.Contains(lower, "executing") {
 		return map[string]interface{}{
 			"type":    "command",
 			"content": line,
 		}
 	}
-	
+
 	// 默认为文本输出
 	return map[string]interface{}{
 		"type":    "chunk",
@@ -301,8 +301,8 @@ func (a *ClaudeAdapter) GetCapabilities() []string {
 // CodexAdapter Codex CLI 适配器
 type CodexAdapter struct {
 	config     *CLIConfig
-	threadID   string      // 保存的会话 ID
-	sessionDir string      // 会话目录
+	threadID   string // 保存的会话 ID
+	sessionDir string // 会话目录
 }
 
 func (a *CodexAdapter) SupportsACP() bool {
@@ -319,21 +319,21 @@ func (a *CodexAdapter) SupportsJSONStream() bool {
 
 func (a *CodexAdapter) BuildCommand(config *CLIConfig) *exec.Cmd {
 	args := []string{"exec"}
-	
+
 	// 如果支持 JSON，添加 --json
 	if a.SupportsJSONStream() {
 		args = append(args, "--json")
 	}
-	
+
 	// 如果有 thread_id，使用 resume 恢复会话
 	if a.threadID != "" {
 		args = append(args, "resume", "--last")
 	}
-	
+
 	if config.Task != "" {
 		args = append(args, config.Task)
 	}
-	
+
 	return exec.Command("codex", args...)
 }
 
@@ -346,7 +346,7 @@ func (a *CodexAdapter) ParseMessage(line string) (map[string]interface{}, error)
 		}
 		return msg, nil
 	}
-	
+
 	// 文本模式匹配
 	parsed := a.parseTextOutput(line)
 	return parsed, nil
@@ -356,21 +356,21 @@ func (a *CodexAdapter) ParseMessage(line string) (map[string]interface{}, error)
 func (a *CodexAdapter) parseTextOutput(line string) map[string]interface{} {
 	// 类似 Claude 的解析逻辑
 	lower := strings.ToLower(line)
-	
+
 	if strings.Contains(lower, "editing") || strings.Contains(lower, "creating") {
 		return map[string]interface{}{
 			"type":    "file_operation",
 			"content": line,
 		}
 	}
-	
+
 	if strings.Contains(lower, "running") || strings.Contains(lower, "executing") {
 		return map[string]interface{}{
 			"type":    "command",
 			"content": line,
 		}
 	}
-	
+
 	return map[string]interface{}{
 		"type":    "chunk",
 		"content": line,
@@ -421,7 +421,7 @@ func (a *CopilotAdapter) ParseMessage(line string) (map[string]interface{}, erro
 		}
 		return msg, nil
 	}
-	
+
 	// 文本模式匹配
 	parsed := a.parseTextOutput(line)
 	return parsed, nil
@@ -430,21 +430,21 @@ func (a *CopilotAdapter) ParseMessage(line string) (map[string]interface{}, erro
 // parseTextOutput 解析 Copilot 文本输出
 func (a *CopilotAdapter) parseTextOutput(line string) map[string]interface{} {
 	lower := strings.ToLower(line)
-	
+
 	if strings.Contains(lower, "editing") || strings.Contains(lower, "creating") {
 		return map[string]interface{}{
 			"type":    "file_operation",
 			"content": line,
 		}
 	}
-	
+
 	if strings.Contains(lower, "running") || strings.Contains(lower, "executing") {
 		return map[string]interface{}{
 			"type":    "command",
 			"content": line,
 		}
 	}
-	
+
 	return map[string]interface{}{
 		"type":    "chunk",
 		"content": line,

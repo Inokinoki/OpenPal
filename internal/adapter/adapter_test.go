@@ -185,11 +185,11 @@ func TestCLIProcessStop(t *testing.T) {
 // TestCLIConfig 测试 CLI 配置
 func TestCLIConfig(t *testing.T) {
 	config := &CLIConfig{
-		Provider:  "claude",
-		WorkDir:   "/workspace",
-		Task:      "Test task",
-		Files:     []string{"file1.go", "file2.go"},
-		Options:   map[string]string{"model": "claude-sonnet"},
+		Provider: "claude",
+		WorkDir:  "/workspace",
+		Task:     "Test task",
+		Files:    []string{"file1.go", "file2.go"},
+		Options:  map[string]string{"model": "claude-sonnet"},
 	}
 
 	if config.Provider != "claude" {
