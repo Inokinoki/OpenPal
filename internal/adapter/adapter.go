@@ -48,10 +48,14 @@ type Adapter interface {
 
 // Manager - Adapter manager
 type Manager struct {
-	adapter   Adapter
-	acpClient *ACPClient // ACP client (if supported)
-	config    *CLIConfig
-	mode      AdapterMode // ACP or Text mode
+	adapter        Adapter
+	acpClient      *ACPClient       // ACP client (if supported)
+	config         *CLIConfig
+	mode           AdapterMode      // ACP or Text mode
+	customCLIPath  string           // Custom CLI path
+	customCaps     []string         // Custom capabilities
+	forceACP       bool             // Force ACP mode
+	forceJSON      bool             // Force JSON stream mode
 }
 
 // AdapterMode - Adapter mode
@@ -103,11 +107,55 @@ func NewAdapter(provider, workDir string) *Manager {
 		adapter = &GenericAdapter{config: config}
 	}
 
-	return &Manager{
+	mgr := &Manager{
 		adapter: adapter,
 		config:  config,
 		mode:    ModeText,
 	}
+
+	// Apply configuration from manager to adapter
+	if claudeAdapter, ok := adapter.(*ClaudeAdapter); ok {
+		claudeAdapter.cliPath = mgr.customCLIPath
+		claudeAdapter.caps = mgr.customCaps
+		claudeAdapter.forceACP = mgr.forceACP
+		claudeAdapter.forceJSON = mgr.forceJSON
+	}
+
+	if codexAdapter, ok := adapter.(*CodexAdapter); ok {
+		codexAdapter.cliPath = mgr.customCLIPath
+		codexAdapter.caps = mgr.customCaps
+		codexAdapter.forceACP = mgr.forceACP
+		codexAdapter.forceJSON = mgr.forceJSON
+	}
+
+	if copilotAdapter, ok := adapter.(*CopilotAdapter); ok {
+		copilotAdapter.cliPath = mgr.customCLIPath
+		copilotAdapter.caps = mgr.customCaps
+		copilotAdapter.forceACP = mgr.forceACP
+		copilotAdapter.forceJSON = mgr.forceJSON
+	}
+
+	return mgr
+}
+
+// SetCLIPath - Set custom CLI executable path
+func (m *Manager) SetCLIPath(path string) {
+	m.customCLIPath = path
+}
+
+// SetCapabilities - Set custom capabilities
+func (m *Manager) SetCapabilities(caps []string) {
+	m.customCaps = caps
+}
+
+// EnableACP - Force enable ACP mode
+func (m *Manager) EnableACP() {
+	m.forceACP = true
+}
+
+// EnableJSONStream - Force enable JSON stream mode
+func (m *Manager) EnableJSONStream() {
+	m.forceJSON = true
 }
 
 // supportsACP - Check if provider supports ACP
@@ -179,9 +227,13 @@ func (m *Manager) GetCapabilities() []string {
 
 // ClaudeAdapter - Claude Code adapter
 type ClaudeAdapter struct {
-	config *CLIConfig
-	mu     sync.Mutex
-	stdin  io.WriteCloser
+	config    *CLIConfig
+	mu        sync.Mutex
+	stdin     io.WriteCloser
+	cliPath   string // Custom CLI path
+	caps      []string
+	forceACP  bool
+	forceJSON bool
 }
 
 func (a *ClaudeAdapter) SupportsACP() bool {
@@ -196,8 +248,12 @@ func (a *ClaudeAdapter) SupportsJSONStream() bool {
 
 func (a *ClaudeAdapter) BuildCommand(config *CLIConfig) *exec.Cmd {
 	args := []string{
-		"-p",                             // print mode (non-interactive)
-		"--output-format", "stream-json", // JSON stream output
+		"-p", // print mode (non-interactive)
+	}
+
+	// JSON stream output (if supported or forced)
+	if a.forceJSON || a.SupportsJSONStream() {
+		args = append(args, "--output-format", "stream-json")
 	}
 
 	// File parameters
@@ -210,7 +266,13 @@ func (a *ClaudeAdapter) BuildCommand(config *CLIConfig) *exec.Cmd {
 		args = append(args, config.Task)
 	}
 
-	return exec.Command("claude", args...)
+	// Use custom CLI path if specified
+	cliPath := a.cliPath
+	if cliPath == "" {
+		cliPath = "claude"
+	}
+
+	return exec.Command(cliPath, args...)
 }
 
 func (a *ClaudeAdapter) ParseMessage(line string) (map[string]interface{}, error) {
@@ -303,6 +365,10 @@ type CodexAdapter struct {
 	config     *CLIConfig
 	threadID   string // Saved session ID
 	sessionDir string // Session directory
+	cliPath    string // Custom CLI path
+	caps       []string
+	forceACP   bool
+	forceJSON  bool
 }
 
 func (a *CodexAdapter) SupportsACP() bool {
@@ -388,7 +454,11 @@ func (a *CodexAdapter) GetCapabilities() []string {
 
 // CopilotAdapter GitHub CopilotAdapter - Copilot CLI adapter
 type CopilotAdapter struct {
-	config *CLIConfig
+	config    *CLIConfig
+	cliPath   string // Custom CLI path
+	caps      []string
+	forceACP  bool
+	forceJSON bool
 }
 
 func (a *CopilotAdapter) SupportsACP() bool {
