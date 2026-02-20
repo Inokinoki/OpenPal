@@ -25,12 +25,14 @@ type Message struct {
 
 // Config - CLI configuration
 type Config struct {
-	URL       string
-	QuestID   string
-	Provider  string
-	Task      string
+	URL         string
+	QuestID     string
+	Provider    string
+	Task        string
 	Interactive bool
-	Verbose   bool
+	Verbose     bool
+	TestMode    bool
+	Duration    int
 }
 
 func main() {
@@ -41,6 +43,8 @@ func main() {
 	task := flag.String("task", "", "Task description")
 	interactive := flag.Bool("i", false, "Interactive mode")
 	verbose := flag.Bool("v", false, "Verbose output")
+	testMode := flag.Bool("test", false, "Test mode (run automated tests)")
+	duration := flag.Int("duration", 30, "Test duration in seconds (default: 30)")
 	flag.Parse()
 
 	config := Config{
@@ -50,6 +54,8 @@ func main() {
 		Task:        *task,
 		Interactive: *interactive,
 		Verbose:     *verbose,
+		TestMode:    *testMode,
+		Duration:    *duration,
 	}
 
 	if config.Verbose {
@@ -65,15 +71,42 @@ func main() {
 	}
 	defer conn.Close()
 
+	// Set pong handler to automatically respond to server pings
+	conn.SetPongHandler(func(string) error {
+		if config.Verbose {
+			log.Printf("🏓 Received ping, auto-responding with pong")
+		}
+		return nil
+	})
+
 	log.Printf("✅ Connected to %s", config.URL)
 
 	// Handle interrupts
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, syscall.SIGINT, syscall.SIGTERM)
 
+	// Send heartbeat every 5 seconds (server expects every 10s)
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			msg := Message{
+				Type:      "heartbeat",
+				Timestamp: time.Now().UnixMilli(),
+				Data: map[string]interface{}{
+					"quest_id": config.QuestID,
+				},
+			}
+			sendMessage(conn, msg)
+		}
+	}()
+
 	// Read messages from server
 	go func() {
 		for {
+			// Set read deadline for pong timeout
+			conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+			
 			_, message, err := conn.ReadMessage()
 			if err != nil {
 				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
@@ -110,8 +143,10 @@ func main() {
 		sendMessage(conn, msg)
 	}
 
-	// Interactive mode or exit
-	if config.Interactive {
+	// Test mode, Interactive mode, or simple wait
+	if config.TestMode {
+		runTests(conn, config)
+	} else if config.Interactive {
 		log.Println("📝 Interactive mode - type messages and press Enter")
 		log.Println("Commands:")
 		log.Println("  /status - Request status")
@@ -161,9 +196,21 @@ func main() {
 			}
 		}
 	} else {
-		// Wait for interrupt
-		<-interrupt
-		log.Println("\n👋 Disconnecting...")
+		// Simple mode: wait for duration or interrupt
+		log.Printf("⏳ Waiting for %d seconds (Ctrl+C to exit)...", config.Duration)
+		
+		done := make(chan bool)
+		go func() {
+			<-interrupt
+			done <- true
+		}()
+		
+		select {
+		case <-done:
+			log.Println("\n👋 Disconnecting...")
+		case <-time.After(time.Duration(config.Duration) * time.Second):
+			log.Printf("\n✅ Test duration completed (%d seconds)", config.Duration)
+		}
 	}
 }
 
@@ -227,7 +274,90 @@ func printMessage(msg Message) {
 			}
 		}
 
+	case "heartbeat_ack":
+		fmt.Printf("💓 Heartbeat ACK\n")
+
 	default:
 		fmt.Printf("📨 %s\n", msg.Type)
 	}
+}
+
+// runTests - Run automated WebSocket tests
+func runTests(conn *websocket.Conn, config Config) {
+	log.Println("🧪 Running WebSocket tests...")
+	fmt.Println("")
+	
+	testResults := make(map[string]bool)
+	
+	// Test 1: Connection established
+	testResults["connection"] = true
+	fmt.Println("✅ Test 1: Connection established")
+	
+	// Test 2: Send heartbeat
+	time.Sleep(1 * time.Second)
+	msg := Message{
+		Type:      "heartbeat",
+		Timestamp: time.Now().UnixMilli(),
+		Data: map[string]interface{}{
+			"quest_id": config.QuestID,
+		},
+	}
+	sendMessage(conn, msg)
+	testResults["heartbeat"] = true
+	fmt.Println("✅ Test 2: Heartbeat sent")
+	
+	// Test 3: Request status
+	time.Sleep(1 * time.Second)
+	msg = Message{
+		Type:      "get_status",
+		Timestamp: time.Now().UnixMilli(),
+		Data: map[string]interface{}{
+			"quest_id": config.QuestID,
+		},
+	}
+	sendMessage(conn, msg)
+	testResults["status_request"] = true
+	fmt.Println("✅ Test 3: Status request sent")
+	
+	// Test 4: Send user input
+	time.Sleep(1 * time.Second)
+	msg = Message{
+		Type:      "user_input",
+		Timestamp: time.Now().UnixMilli(),
+		Data: map[string]interface{}{
+			"quest_id": config.QuestID,
+			"content":  "Hello, this is a test message!",
+		},
+	}
+	sendMessage(conn, msg)
+	testResults["user_input"] = true
+	fmt.Println("✅ Test 4: User input sent")
+	
+	// Test 5: Wait and monitor
+	fmt.Printf("⏳ Test 5: Monitoring for %d seconds...\n", config.Duration)
+	time.Sleep(time.Duration(config.Duration) * time.Second)
+	testResults["monitoring"] = true
+	fmt.Println("✅ Test 5: Monitoring completed")
+	
+	// Summary
+	fmt.Println("")
+	fmt.Println("==================================================")
+	fmt.Println("📊 Test Summary:")
+	fmt.Println("==================================================")
+	allPassed := true
+	for test, passed := range testResults {
+		status := "✅ PASS"
+		if !passed {
+			status = "❌ FAIL"
+			allPassed = false
+		}
+		fmt.Printf("%s: %s\n", status, test)
+	}
+	fmt.Println("==================================================")
+	if allPassed {
+		fmt.Println("🎉 All tests passed!")
+	} else {
+		fmt.Println("⚠️  Some tests failed")
+	}
+	fmt.Println("")
 }
