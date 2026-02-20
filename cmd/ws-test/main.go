@@ -17,10 +17,10 @@ import (
 
 // Message - WebSocket message structure
 type Message struct {
-	Type      string                 `json:"type"`
-	Data      map[string]interface{} `json:"data,omitempty"`
-	Timestamp int64                  `json:"timestamp"`
-	Seq       int64                  `json:"seq,omitempty"`
+	Command string                 `json:"command"`
+	Data    map[string]interface{} `json:"data"`
+	Timestamp int64                `json:"timestamp"`
+	Seq       int64                `json:"seq,omitempty"`
 }
 
 // Config - CLI configuration
@@ -91,7 +91,7 @@ func main() {
 		defer ticker.Stop()
 		for range ticker.C {
 			msg := Message{
-				Type:      "heartbeat",
+				Command:   "heartbeat",
 				Timestamp: time.Now().UnixMilli(),
 				Data: map[string]interface{}{
 					"quest_id": config.QuestID,
@@ -119,7 +119,7 @@ func main() {
 			log.Printf("📥 Raw received: %s", string(message))
 
 			// Pretty print JSON
-			var msg Message
+			var msg ServerMessage
 			if err := json.Unmarshal(message, &msg); err == nil {
 				if config.Verbose {
 					log.Printf("📥 Parsed: Type=%s, Data=%v", msg.Type, msg.Data)
@@ -134,7 +134,7 @@ func main() {
 	// Send initial connection message
 	if config.Task != "" {
 		msg := Message{
-			Type:      "start_task",
+			Command:   "start_task",
 			Timestamp: time.Now().UnixMilli(),
 			Data: map[string]interface{}{
 				"quest_id": config.QuestID,
@@ -174,7 +174,7 @@ func main() {
 
 			if input == "/status" {
 				msg := Message{
-					Type:      "get_status",
+					Command:   "get_status",
 					Timestamp: time.Now().UnixMilli(),
 					Data: map[string]interface{}{
 						"quest_id": config.QuestID,
@@ -187,11 +187,10 @@ func main() {
 			// Send as input message
 			if input != "" {
 				msg := Message{
-					Type:      "user_input",
+					Command:   "send_input",
 					Timestamp: time.Now().UnixMilli(),
 					Data: map[string]interface{}{
-						"quest_id": config.QuestID,
-						"content":  input,
+						"content": input,
 					},
 				}
 				sendMessage(conn, msg, config.Verbose)
@@ -229,12 +228,20 @@ func sendMessage(conn *websocket.Conn, msg Message, verbose bool) {
 	}
 
 	// Only log non-heartbeat messages or when verbose
-	if verbose || msg.Type != "heartbeat" {
-		log.Printf("📤 Sent: %s", msg.Type)
+	if verbose || msg.Command != "heartbeat" {
+		log.Printf("📤 Sent: %s", msg.Command)
 	}
 }
 
-func printMessage(msg Message) {
+// ServerMessage - Server message structure (for receiving)
+type ServerMessage struct {
+	Type      string                 `json:"type"`
+	Data      map[string]interface{} `json:"data,omitempty"`
+	Timestamp int64                  `json:"timestamp"`
+	Seq       int64                  `json:"seq,omitempty"`
+}
+
+func printMessage(msg ServerMessage) {
 	switch msg.Type {
 	case "connected":
 		fmt.Printf("🔗 Connected\n")
@@ -301,7 +308,7 @@ func runTests(conn *websocket.Conn, config Config) {
 	// Test 2: Send heartbeat
 	time.Sleep(1 * time.Second)
 	msg := Message{
-		Type:      "heartbeat",
+		Command:   "heartbeat",
 		Timestamp: time.Now().UnixMilli(),
 		Data: map[string]interface{}{
 			"quest_id": config.QuestID,
@@ -314,7 +321,7 @@ func runTests(conn *websocket.Conn, config Config) {
 	// Test 3: Request status
 	time.Sleep(1 * time.Second)
 	msg = Message{
-		Type:      "get_status",
+		Command:   "get_status",
 		Timestamp: time.Now().UnixMilli(),
 		Data: map[string]interface{}{
 			"quest_id": config.QuestID,
@@ -327,11 +334,10 @@ func runTests(conn *websocket.Conn, config Config) {
 	// Test 4: Send user input
 	time.Sleep(1 * time.Second)
 	msg = Message{
-		Type:      "user_input",
+		Command:   "send_input",
 		Timestamp: time.Now().UnixMilli(),
 		Data: map[string]interface{}{
-			"quest_id": config.QuestID,
-			"content":  "Hello, this is a test message!",
+			"content": "Hello, this is a test message!",
 		},
 	}
 	sendMessage(conn, msg, config.Verbose)
