@@ -142,6 +142,7 @@ type WebSocketServer struct {
 	wg          sync.WaitGroup
 	cliStarted  bool // Track if CLI has been started
 	inputQueue  chan InputMessage // Queue for input messages
+	sessionDir  string // Directory for session files
 }
 
 // ClientMessage Client message
@@ -188,6 +189,7 @@ func NewWebSocketServer(stateMgr *state.Manager, taskID string, cliAdapter *adap
 		historyFile: historyFile,
 		cliStarted:  false,
 		inputQueue:  make(chan InputMessage, 100), // Buffered queue
+		sessionDir:  sessionDir,
 		config: ClientConfig{
 			EnableCompression: true,
 			EnableHeartbeat:   true,
@@ -726,7 +728,7 @@ func (s *WebSocketServer) processInputQueue() {
 	// Set task in adapter
 	s.cliAdapter.SetTask(firstMsg.Content)
 	
-	// Start CLI
+	// Start CLI (for ACP mode, this starts the process and initializes)
 	cli, err := s.cliAdapter.Start()
 	if err != nil {
 		log.Printf("[DEBUG] processInputQueue: failed to start CLI: %v", err)
@@ -737,25 +739,41 @@ func (s *WebSocketServer) processInputQueue() {
 	s.cli = cli
 	log.Printf("[DEBUG] processInputQueue: CLI started with PID: %d", cli.Pid)
 	
-	// Start forwarding output
-	go func() {
-		log.Printf("[DEBUG] ForwardOutput: starting stderr forwarder")
-		s.forwardStream(cli.Stderr, "error")
-		log.Printf("[DEBUG] ForwardOutput: stderr forwarder exited")
-	}()
+	// For ACP mode, create session after starting CLI
+	if err := s.cliAdapter.CreateSession(s.sessionDir); err != nil {
+		log.Printf("[DEBUG] processInputQueue: failed to create session: %v", err)
+		s.errorCh <- fmt.Errorf("failed to create session: %w", err)
+		return
+	}
+	log.Printf("[DEBUG] processInputQueue: session created")
 	
+	// For ACP mode, send prompt using ACP protocol
+	if s.cliAdapter.GetMode() == adapter.ModeACP {
+		log.Printf("[DEBUG] processInputQueue: sending ACP prompt")
+		if err := s.cliAdapter.SendACPPrompt(firstMsg.Content); err != nil {
+			log.Printf("[DEBUG] processInputQueue: failed to send prompt: %v", err)
+			s.errorCh <- fmt.Errorf("failed to send prompt: %w", err)
+			return
+		}
+		log.Printf("[DEBUG] processInputQueue: ACP prompt sent")
+	}
+	
+	// Start forwarding output
 	go func() {
 		log.Printf("[DEBUG] ForwardOutput: starting stdout forwarder")
 		s.forwardStream(cli.Stdout, "chunk")
 		log.Printf("[DEBUG] ForwardOutput: stdout forwarder exited")
 	}()
 	
-	// Send first message
-	s.sendToCLI(firstMsg)
-	
 	// Process remaining messages
 	for inputMsg := range s.inputQueue {
-		s.sendToCLI(inputMsg)
+		log.Printf("[DEBUG] processInputQueue: processing input: %s", inputMsg.Content)
+		if s.cliAdapter.GetMode() == adapter.ModeACP {
+			if err := s.cliAdapter.SendACPPrompt(inputMsg.Content); err != nil {
+				log.Printf("[DEBUG] processInputQueue: failed to send input: %v", err)
+				s.errorCh <- fmt.Errorf("failed to send input: %w", err)
+			}
+		}
 	}
 	
 	log.Printf("[DEBUG] processInputQueue: queue closed, exiting")

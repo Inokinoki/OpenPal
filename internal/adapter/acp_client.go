@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os/exec"
 	"sync"
-	"time"
 )
 
 // ACPMessage ACP ProtocolMessage
@@ -64,40 +64,52 @@ func NewACPClient(provider string) (*ACPClient, error) {
 		return nil, fmt.Errorf("unsupported ACP provider: %s", provider)
 	}
 
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, err
-	}
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
+	// Don't start the process here - wait for Start() to be called
+	// This allows on-demand CLI startup
 
 	return &ACPClient{
 		provider: provider,
 		cmd:      cmd,
-		stdin:    stdin,
-		stdout:   stdout,
+		stdin:    nil,  // Will be set in Start()
+		stdout:   nil,  // Will be set in Start()
 		seq:      0,
 	}, nil
 }
 
-// Start Start ACP client（Initialization）
+// Start Start ACP client (start process and initialize)
 func (c *ACPClient) Start() error {
-	// Send initialize request
+	// Start the process if not already started
+	if c.stdin == nil || c.stdout == nil {
+		var err error
+		c.stdin, err = c.cmd.StdinPipe()
+		if err != nil {
+			return fmt.Errorf("ACP stdin pipe failed: %w", err)
+		}
+
+		c.stdout, err = c.cmd.StdoutPipe()
+		if err != nil {
+			return fmt.Errorf("ACP stdout pipe failed: %w", err)
+		}
+
+		if err := c.cmd.Start(); err != nil {
+			return fmt.Errorf("ACP process start failed: %w", err)
+		}
+
+		log.Printf("[DEBUG] ACP process started: PID=%d, provider=%s", c.cmd.Process.Pid, c.provider)
+	}
+
+	// Send initialize request and read response
+	initializeResult := make(map[string]interface{})
 	err := c.sendRequest("initialize", map[string]interface{}{
-		"protocolVersion":    "2025-06-18",
+		"protocolVersion":    1,  // ACP protocol version (must be <= 65535)
 		"clientCapabilities": map[string]interface{}{},
-	}, nil)
+	}, &initializeResult)
 
 	if err != nil {
 		return fmt.Errorf("ACP initialize failed: %w", err)
 	}
+
+	log.Printf("[DEBUG] ACP initialized: %+v", initializeResult)
 
 	return nil
 }
@@ -115,9 +127,13 @@ func (c *ACPClient) NewSession(cwd string, mcpServers []interface{}) (string, er
 
 	err := c.sendRequest("session/new", params, &result)
 	if err != nil {
+		log.Printf("[DEBUG] NewSession: session/new failed: %v", err)
 		return "", err
 	}
 
+	log.Printf("[DEBUG] NewSession: raw result: %+v", result)
+	log.Printf("[DEBUG] NewSession: sessionID: '%s'", result.SessionID)
+	
 	c.sessionID = result.SessionID
 	return result.SessionID, nil
 }
@@ -199,12 +215,46 @@ func (c *ACPClient) sendRequest(method string, params interface{}, result interf
 		return err
 	}
 
-	// IfNeedResult，Wait for response（simplifiedImplement）
-	// ActualImplementNeedasyncHandleAndrequest ID Match
+	log.Printf("[DEBUG] sendRequest: sent %s (id=%d)", method, id)
+
+	// Read response if result is expected
 	if result != nil {
-		// SimpleDelayWait（ActualShoulduse channel And select）
-		time.Sleep(100 * time.Millisecond)
-		// TODO: ImplementcorrectResponseWaitmechanism
+		reader := bufio.NewReader(c.stdout)
+		line, err := reader.ReadBytes('\n')
+		if err != nil {
+			log.Printf("[DEBUG] sendRequest: read response failed: %v", err)
+			return fmt.Errorf("read response failed: %w", err)
+		}
+
+		log.Printf("[DEBUG] sendRequest: received %d bytes", len(line))
+
+		// Parse response
+		var response map[string]interface{}
+		if err := json.Unmarshal(line, &response); err != nil {
+			log.Printf("[DEBUG] sendRequest: parse response failed: %v", err)
+			return fmt.Errorf("parse response failed: %w", err)
+		}
+
+		log.Printf("[DEBUG] sendRequest: response: %+v", response)
+
+		// Check for error
+		if errMsg, ok := response["error"]; ok && errMsg != nil {
+			log.Printf("[DEBUG] sendRequest: response error: %+v", errMsg)
+			return fmt.Errorf("ACP error: %+v", errMsg)
+		}
+
+		// Extract result
+		if respResult, ok := response["result"]; ok {
+			resultData, err := json.Marshal(respResult)
+			if err != nil {
+				return err
+			}
+			if err := json.Unmarshal(resultData, result); err != nil {
+				log.Printf("[DEBUG] sendRequest: unmarshal result failed: %v", err)
+				return err
+			}
+			log.Printf("[DEBUG] sendRequest: result unmarshaled: %+v", result)
+		}
 	}
 
 	return nil

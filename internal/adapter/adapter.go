@@ -75,24 +75,19 @@ func NewAdapter(provider, workDir string) *Manager {
 		Options:  make(map[string]string),
 	}
 
-	// Check if ACP is supported
+	// Check if ACP is supported - create client but DON'T start yet
+	// CLI will be started on-demand when start_task is received
 	if supportsACP(provider) {
 		acpClient, err := NewACPClient(provider)
 		if err == nil {
-			// Initialize ACP client
-			if err := acpClient.Start(); err == nil {
-				// Create session
-				_, err := acpClient.NewSession(workDir, []interface{}{})
-				if err == nil {
-					return &Manager{
-						acpClient: acpClient,
-						config:    config,
-						mode:      ModeACP,
-					}
-				}
+			// Create session info but don't start the process yet
+			return &Manager{
+				acpClient: acpClient,
+				config:    config,
+				mode:      ModeACP,  // Mode is ACP, but process not started
 			}
 		}
-		// Fallback to text mode if ACP initialization fails
+		// Fallback to text mode if ACP client creation fails
 	}
 
 	// Text mode
@@ -180,6 +175,11 @@ func supportsACP(provider string) bool {
 func (m *Manager) Start() (*CLIProcess, error) {
 	// ACP mode
 	if m.mode == ModeACP && m.acpClient != nil {
+		// Start ACP process and initialize
+		if err := m.acpClient.Start(); err != nil {
+			return nil, err
+		}
+		
 		return &CLIProcess{
 			Cmd:    m.acpClient.cmd,
 			Stdin:  m.acpClient.stdin,
@@ -223,6 +223,20 @@ func (m *Manager) Start() (*CLIProcess, error) {
 		Stderr: stderr,
 		Pid:    cmd.Process.Pid,
 	}, nil
+}
+
+// CreateSession Create ACP session (ACP mode only)
+func (m *Manager) CreateSession(cwd string) error {
+	if m.mode == ModeACP && m.acpClient != nil {
+		sessionID, err := m.acpClient.NewSession(cwd, []interface{}{})
+		if err != nil {
+			log.Printf("[DEBUG] CreateSession: failed to create session: %v", err)
+			return err
+		}
+		log.Printf("[DEBUG] CreateSession: session created: %s", sessionID)
+		return err
+	}
+	return nil // Text mode doesn't need session
 }
 
 // SendCommand SendCommand - Send command to CLI

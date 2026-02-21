@@ -226,6 +226,8 @@ func autoDetectProvider(provider string) {
 		switch provider {
 		case "copilot", "copilot-acp":
 			*supportsACP = true // Copilot supports ACP
+		case "opencode":
+			*supportsACP = true // OpenCode supports ACP
 		}
 	}
 
