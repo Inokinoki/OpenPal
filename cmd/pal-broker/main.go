@@ -141,25 +141,8 @@ func main() {
 		cliAdapter.EnableJSONStream()
 	}
 
-	// Start AI CLI
-	cli, err := cliAdapter.Start()
-	if err != nil {
-		log.Fatalf("Failed to start AI CLI: %v", err)
-	}
-
-	log.Printf("AI CLI started (PID: %d)", cli.Pid)
-
-	// Save AI CLI PID
-	cliPidFile := filepath.Join(dir, "cli.pid")
-	if err := os.WriteFile(cliPidFile, []byte(fmt.Sprintf("%d", cli.Pid)), 0644); err != nil {
-		log.Printf("Warning: failed to write CLI PID file: %v", err)
-	}
-
-	// Update status with CLI PID
-	statusMgr.UpdateAgentStatus("running", cli.Pid, 0)
-
-	// Start WebSocket server
-	wsServer := server.NewWebSocketServer(stateMgr, id, cli, *saveHistory, *sessionDir)
+	// Start WebSocket server (CLI not started yet)
+	wsServer := server.NewWebSocketServer(stateMgr, id, cliAdapter, *saveHistory, *sessionDir)
 	port, err := wsServer.Start(*portFlag)
 	if err != nil {
 		log.Fatalf("Failed to start WebSocket server on %s: %v", *portFlag, err)
@@ -174,12 +157,6 @@ func main() {
 	}
 	log.Printf("Port file written to: %s", portFile)
 
-	// Update status with WebSocket port
-	statusMgr.UpdateAgentStatus("running", cli.Pid, port)
-
-	// Forward CLI output to state manager
-	go wsServer.ForwardOutput(cli.Stdout, cli.Stderr)
-
 	// Graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -187,17 +164,11 @@ func main() {
 	sig := <-sigChan
 	log.Printf("Received signal %v, shutting down...", sig)
 
-	// Stop AI CLI
-	if err := cli.Stop(); err != nil {
-		log.Printf("Warning: failed to stop AI CLI: %v", err)
-	}
-
-	// Close history file if open
+	// Stop WebSocket server (which will stop CLI if running)
 	wsServer.Stop()
 
 	// Update status
 	statusMgr.SetStopped()
-	stateMgr.UpdateStatus(id, "stopped")
 
 	log.Println("Cleanup completed, exiting")
 	os.Exit(0)

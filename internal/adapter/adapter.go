@@ -149,6 +149,11 @@ func (m *Manager) SetCapabilities(caps []string) {
 	m.customCaps = caps
 }
 
+// SetTask - Set task description
+func (m *Manager) SetTask(task string) {
+	m.config.Task = task
+}
+
 // EnableACP - Force enable ACP mode
 func (m *Manager) EnableACP() {
 	m.forceACP = true
@@ -253,25 +258,19 @@ func (a *ClaudeAdapter) SupportsJSONStream() bool {
 
 func (a *ClaudeAdapter) BuildCommand(config *CLIConfig) *exec.Cmd {
 	args := []string{
-		// Remove -p mode for interactive usage
-		// Use interactive mode for continuous conversation
+		// Interactive mode (no -p flag)
+		// Allows continuous conversation via stdin/stdout
+		"--output-format", "stream-json",
+		"--input-format", "stream-json",
+		"--verbose",
 	}
-
-	// JSON stream output (if supported or forced)
-	if a.forceJSON || a.SupportsJSONStream() {
-		args = append(args, "--output-format", "stream-json")
-	}
-
-	// Include partial messages for real-time streaming
-	// This shows intermediate thinking and partial responses
-	args = append(args, "--include-partial-messages")
 
 	// File parameters
 	for _, file := range config.Files {
 		args = append(args, "--add-dir", file)
 	}
 
-	// Note: Task is sent via stdin in interactive mode
+	// Note: In interactive mode, task is sent via stdin
 	// Don't pass it as command line argument
 
 	// Use custom CLI path if specified
@@ -280,31 +279,123 @@ func (a *ClaudeAdapter) BuildCommand(config *CLIConfig) *exec.Cmd {
 		cliPath = "claude"
 	}
 
+	log.Printf("[DEBUG] ClaudeAdapter: Building command: %s %v", cliPath, args)
 	return exec.Command(cliPath, args...)
 }
 
 func (a *ClaudeAdapter) ParseMessage(line string) (map[string]interface{}, error) {
-	// Claude Code outputs human-readable text, needs pattern matching
-
-	// Try to parse JSON (if CLI supports it)
+	// Try to parse JSON
 	var msg map[string]interface{}
-	if err := json.Unmarshal([]byte(line), &msg); err == nil {
-		// Handle null, array, number and other non-object types
-		if msg == nil {
-			return map[string]interface{}{
-				"type":    "chunk",
-				"content": line,
-			}, nil
-		}
-		if _, ok := msg["type"]; !ok {
-			msg["type"] = "chunk"
-		}
-		return msg, nil
+	if err := json.Unmarshal([]byte(line), &msg); err != nil {
+		// Non-JSON, treat as text
+		return a.parseTextOutput(line), nil
 	}
 
-	// Text modeMatch
-	parsed := a.parseTextOutput(line)
-	return parsed, nil
+	// Handle Claude's stream-json format
+	if msgType, ok := msg["type"].(string); ok {
+		switch msgType {
+		case "stream_event":
+			// Extract nested event
+			if event, ok := msg["event"].(map[string]interface{}); ok {
+				if eventType, ok := event["type"].(string); ok {
+					switch eventType {
+					case "content_block_delta":
+						// Extract text delta
+						if delta, ok := event["delta"].(map[string]interface{}); ok {
+							if text, ok := delta["text"].(string); ok {
+								return map[string]interface{}{
+									"type":    "chunk",
+									"content": text,
+								}, nil
+							}
+						}
+					case "content_block_stop":
+						// Content block completed
+						return map[string]interface{}{
+							"type":    "content_stop",
+							"content": "",
+						}, nil
+					case "message_start":
+						// Message started
+						return map[string]interface{}{
+							"type":    "message_start",
+							"content": "",
+						}, nil
+					case "message_delta":
+						// Message delta (usage, stop_reason, etc.)
+						return map[string]interface{}{
+							"type":    "message_delta",
+							"content": "",
+							"data":    event,
+						}, nil
+					case "message_stop":
+						// Message completed
+						return map[string]interface{}{
+							"type":    "message_stop",
+							"content": "",
+						}, nil
+					}
+				}
+			}
+			// Unknown stream_event type
+			return map[string]interface{}{
+				"type":    "stream_event",
+				"content": "",
+				"data":    msg,
+			}, nil
+
+		case "system":
+			// System initialization message
+			return map[string]interface{}{
+				"type":    "system",
+				"content": "Claude initialized",
+				"data":    msg,
+			}, nil
+
+		case "assistant":
+			// Final assistant message
+			content := ""
+			if message, ok := msg["message"].(map[string]interface{}); ok {
+				if contentArr, ok := message["content"].([]interface{}); ok && len(contentArr) > 0 {
+					if firstBlock, ok := contentArr[0].(map[string]interface{}); ok {
+						if text, ok := firstBlock["text"].(string); ok {
+							content = text
+						}
+					}
+				}
+			}
+			return map[string]interface{}{
+				"type":    "assistant",
+				"content": content,
+				"data":    msg,
+			}, nil
+
+		case "result":
+			// Final result
+			content := ""
+			if result, ok := msg["result"].(string); ok {
+				content = result
+			}
+			return map[string]interface{}{
+				"type":    "result",
+				"content": content,
+				"data":    msg,
+			}, nil
+
+		default:
+			// Other message types
+			if _, ok := msg["content"]; !ok {
+				msg["content"] = ""
+			}
+			return msg, nil
+		}
+	}
+
+	// Default
+	return map[string]interface{}{
+		"type":    "chunk",
+		"content": line,
+	}, nil
 }
 
 // parseTextOutput parseTextOutput - Parse Claude Code text output

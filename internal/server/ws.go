@@ -119,11 +119,18 @@ var upgrader = websocket.Upgrader{
 	WriteBufferSize:   1024,
 }
 
+// InputMessage - Message to send to CLI
+type InputMessage struct {
+	Content string
+	Type    string // "task" or "input"
+}
+
 // WebSocketServer WebSocket server
 type WebSocketServer struct {
 	stateMgr    *state.Manager
 	taskID      string
 	cli         *adapter.CLIProcess
+	cliAdapter  *adapter.Manager // CLI adapter for starting CLI on demand
 	clients     map[string]*WebSocketClient
 	mu          sync.RWMutex
 	broadcastCh chan state.Event
@@ -133,6 +140,8 @@ type WebSocketServer struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
 	wg          sync.WaitGroup
+	cliStarted  bool // Track if CLI has been started
+	inputQueue  chan InputMessage // Queue for input messages
 }
 
 // ClientMessage Client message
@@ -147,8 +156,8 @@ type ServerEvent struct {
 	DeviceID string `json:"device_id,omitempty"`
 }
 
-// NewWebSocketServer Create WebSocket server
-func NewWebSocketServer(stateMgr *state.Manager, taskID string, cli *adapter.CLIProcess, saveHistory bool, sessionDir string) *WebSocketServer {
+// NewWebSocketServer Create WebSocket server (CLI not started yet)
+func NewWebSocketServer(stateMgr *state.Manager, taskID string, cliAdapter *adapter.Manager, saveHistory bool, sessionDir string) *WebSocketServer {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	var historyFile *os.File
@@ -171,11 +180,14 @@ func NewWebSocketServer(stateMgr *state.Manager, taskID string, cli *adapter.CLI
 	return &WebSocketServer{
 		stateMgr:    stateMgr,
 		taskID:      taskID,
-		cli:         cli,
+		cli:         nil, // Not started yet
+		cliAdapter:  cliAdapter,
 		clients:     make(map[string]*WebSocketClient),
-		broadcastCh: make(chan state.Event, 100), // bufferedChannel
+		broadcastCh: make(chan state.Event, 100),
 		errorCh:     make(chan error, 10),
 		historyFile: historyFile,
+		cliStarted:  false,
+		inputQueue:  make(chan InputMessage, 100), // Buffered queue
 		config: ClientConfig{
 			EnableCompression: true,
 			EnableHeartbeat:   true,
@@ -229,6 +241,9 @@ func (s *WebSocketServer) Stop() error {
 	// Cancel context
 	s.cancel()
 
+	// Close input queue
+	close(s.inputQueue)
+
 	// CloseAllClientConnected
 	s.mu.Lock()
 	for deviceID, client := range s.clients {
@@ -247,6 +262,14 @@ func (s *WebSocketServer) Stop() error {
 
 	// Wait for all goroutines
 	s.wg.Wait()
+
+	// Stop CLI if running
+	if s.cli != nil {
+		log.Printf("Stopping CLI (PID: %d)...", s.cli.Pid)
+		if err := s.cli.Stop(); err != nil {
+			log.Printf("Warning: failed to stop CLI: %v", err)
+		}
+	}
 
 	// Close history file if open
 	if s.historyFile != nil {
@@ -597,12 +620,15 @@ func (s *WebSocketServer) listen(client *WebSocketClient) {
 		}
 
 		client.UpdateActivity()
+		log.Printf("[DEBUG] listen: received message from %s: %s", client.DeviceID, string(message))
 
 		var msg ClientMessage
 		if err := json.Unmarshal(message, &msg); err != nil {
 			s.errorCh <- fmt.Errorf("failed to parse message: %w", err)
 			continue
 		}
+
+		log.Printf("[DEBUG] listen: parsed command: %s", msg.Command)
 
 		// Handle command
 		s.handleCommand(msg, client)
@@ -683,6 +709,77 @@ func (s *WebSocketServer) attemptReconnect(client *WebSocketClient) {
 	// listen() goroutine will exit, but ping goroutine should have already stopped
 }
 
+// processInputQueue - Process input queue and send to CLI
+func (s *WebSocketServer) processInputQueue() {
+	log.Printf("[DEBUG] processInputQueue: starting")
+	
+	// Wait for first message (should be task)
+	firstMsg, ok := <-s.inputQueue
+	if !ok {
+		log.Printf("[DEBUG] processInputQueue: queue closed before first message")
+		return
+	}
+	
+	// Start CLI with the task
+	log.Printf("[DEBUG] processInputQueue: starting CLI with task: %s", firstMsg.Content)
+	
+	// Set task in adapter
+	s.cliAdapter.SetTask(firstMsg.Content)
+	
+	// Start CLI
+	cli, err := s.cliAdapter.Start()
+	if err != nil {
+		log.Printf("[DEBUG] processInputQueue: failed to start CLI: %v", err)
+		s.errorCh <- fmt.Errorf("failed to start CLI: %w", err)
+		return
+	}
+	
+	s.cli = cli
+	log.Printf("[DEBUG] processInputQueue: CLI started with PID: %d", cli.Pid)
+	
+	// Start forwarding output
+	go func() {
+		log.Printf("[DEBUG] ForwardOutput: starting stderr forwarder")
+		s.forwardStream(cli.Stderr, "error")
+		log.Printf("[DEBUG] ForwardOutput: stderr forwarder exited")
+	}()
+	
+	go func() {
+		log.Printf("[DEBUG] ForwardOutput: starting stdout forwarder")
+		s.forwardStream(cli.Stdout, "chunk")
+		log.Printf("[DEBUG] ForwardOutput: stdout forwarder exited")
+	}()
+	
+	// Send first message
+	s.sendToCLI(firstMsg)
+	
+	// Process remaining messages
+	for inputMsg := range s.inputQueue {
+		s.sendToCLI(inputMsg)
+	}
+	
+	log.Printf("[DEBUG] processInputQueue: queue closed, exiting")
+}
+
+// sendToCLI - Send message to CLI stdin
+func (s *WebSocketServer) sendToCLI(inputMsg InputMessage) {
+	if s.cli == nil || s.cli.Stdin == nil {
+		log.Printf("[DEBUG] sendToCLI: CLI not ready")
+		return
+	}
+	
+	// Send as JSON format for stream-json input mode
+	// Format: {"message":{"role":"user","content":"..."}}
+	inputJSON := fmt.Sprintf("{\"message\":{\"role\":\"user\",\"content\":\"%s\"}}\n", inputMsg.Content)
+	n, err := s.cli.Stdin.Write([]byte(inputJSON))
+	if err != nil {
+		log.Printf("[DEBUG] sendToCLI: failed to write to CLI stdin: %v", err)
+		s.errorCh <- fmt.Errorf("failed to send to CLI: %w", err)
+	} else {
+		log.Printf("[DEBUG] sendToCLI: wrote %d bytes to CLI stdin", n)
+	}
+}
+
 func (s *WebSocketServer) handleCommand(msg ClientMessage, client *WebSocketClient) {
 	switch msg.Command {
 	case "heartbeat":
@@ -695,35 +792,45 @@ func (s *WebSocketServer) handleCommand(msg ClientMessage, client *WebSocketClie
 		})
 
 	case "start_task":
-		// Send task to CLI (if CLI accepts task via stdin)
-		if s.cli != nil && s.cli.Stdin != nil {
-			if task, ok := msg.Data["task"].(string); ok {
-				// Log to history file
-				if s.historyFile != nil {
-					timestamp := time.Now().Format("2006-01-02 15:04:05")
-					fmt.Fprintf(s.historyFile, "[%s] [task] %s\n", timestamp, task)
-				}
-				
-				if _, err := s.cli.Stdin.Write([]byte(task + "\n")); err != nil {
-					s.errorCh <- fmt.Errorf("failed to send task: %w", err)
-				}
+		log.Printf("[DEBUG] handleCommand: processing start_task")
+		
+		// Add task to input queue
+		if task, ok := msg.Data["task"].(string); ok {
+			s.inputQueue <- InputMessage{
+				Content: task,
+				Type:    "task",
 			}
+			
+			// Log to history file
+			if s.historyFile != nil {
+				timestamp := time.Now().Format("2006-01-02 15:04:05")
+				fmt.Fprintf(s.historyFile, "[%s] [task] %s\n", timestamp, task)
+			}
+		}
+		
+		// Start CLI processor if not already started
+		if !s.cliStarted && s.cliAdapter != nil {
+			s.cliStarted = true
+			go s.processInputQueue()
 		}
 
 	case "send_input":
-		// Send input to CLI
-		if s.cli != nil && s.cli.Stdin != nil {
-			if content, ok := msg.Data["content"].(string); ok {
-				// Log to history file
-				if s.historyFile != nil {
-					timestamp := time.Now().Format("2006-01-02 15:04:05")
-					fmt.Fprintf(s.historyFile, "[%s] [input] %s\n", timestamp, content)
-				}
-				
-				if _, err := s.cli.Stdin.Write([]byte(content + "\n")); err != nil {
-					s.errorCh <- fmt.Errorf("failed to send input: %w", err)
-				}
+		log.Printf("[DEBUG] handleCommand: processing send_input")
+		// Add input to queue
+		if content, ok := msg.Data["content"].(string); ok {
+			// Log to history file
+			if s.historyFile != nil {
+				timestamp := time.Now().Format("2006-01-02 15:04:05")
+				fmt.Fprintf(s.historyFile, "[%s] [input] %s\n", timestamp, content)
 			}
+			
+			// Add to queue (will be sent when CLI is ready)
+			s.inputQueue <- InputMessage{
+				Content: content,
+				Type:    "input",
+			}
+		} else {
+			log.Printf("[DEBUG] handleCommand: no content in message data: %v", msg.Data)
 		}
 
 	case "cancel":

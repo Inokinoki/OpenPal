@@ -131,7 +131,7 @@ func main() {
 		}
 	}()
 
-	// Send initial connection message
+	// Send initial task
 	if config.Task != "" {
 		log.Printf("📤 Sending start_task command")
 		msg := Message{
