@@ -678,6 +678,12 @@ func (s *WebSocketServer) handleCommand(msg ClientMessage, client *WebSocketClie
 		// Send task to CLI (if CLI accepts task via stdin)
 		if s.cli != nil && s.cli.Stdin != nil {
 			if task, ok := msg.Data["task"].(string); ok {
+				// Log to history file
+				if s.historyFile != nil {
+					timestamp := time.Now().Format("2006-01-02 15:04:05")
+					fmt.Fprintf(s.historyFile, "[%s] [task] %s\n", timestamp, task)
+				}
+				
 				if _, err := s.cli.Stdin.Write([]byte(task + "\n")); err != nil {
 					s.errorCh <- fmt.Errorf("failed to send task: %w", err)
 				}
@@ -688,6 +694,12 @@ func (s *WebSocketServer) handleCommand(msg ClientMessage, client *WebSocketClie
 		// Send input to CLI
 		if s.cli != nil && s.cli.Stdin != nil {
 			if content, ok := msg.Data["content"].(string); ok {
+				// Log to history file
+				if s.historyFile != nil {
+					timestamp := time.Now().Format("2006-01-02 15:04:05")
+					fmt.Fprintf(s.historyFile, "[%s] [input] %s\n", timestamp, content)
+				}
+				
 				if _, err := s.cli.Stdin.Write([]byte(content + "\n")); err != nil {
 					s.errorCh <- fmt.Errorf("failed to send input: %w", err)
 				}
@@ -741,6 +753,20 @@ func (s *WebSocketServer) handleCommand(msg ClientMessage, client *WebSocketClie
 func (s *WebSocketServer) broadcastToClients(event state.Event) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
+	// Log broadcast to history file
+	if s.historyFile != nil {
+		timestamp := time.Now().Format("2006-01-02 15:04:05")
+		content := ""
+		if eventData, ok := event.Data.(map[string]interface{}); ok {
+			if c, exists := eventData["content"].(string); exists {
+				content = c
+			}
+		}
+		if content != "" {
+			fmt.Fprintf(s.historyFile, "[%s] [output] %s\n", timestamp, content)
+		}
+	}
 
 	for deviceID, client := range s.clients {
 		if client.IsClosed() {
