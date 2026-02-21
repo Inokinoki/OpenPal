@@ -133,6 +133,7 @@ func main() {
 
 	// Send initial connection message
 	if config.Task != "" {
+		log.Printf("📤 Sending start_task command")
 		msg := Message{
 			Command:   "start_task",
 			Timestamp: time.Now().UnixMilli(),

@@ -248,7 +248,8 @@ func (a *ClaudeAdapter) SupportsJSONStream() bool {
 
 func (a *ClaudeAdapter) BuildCommand(config *CLIConfig) *exec.Cmd {
 	args := []string{
-		"-p", // print mode (non-interactive)
+		// Remove -p mode for interactive usage
+		// Use interactive mode for continuous conversation
 	}
 
 	// JSON stream output (if supported or forced)
@@ -256,15 +257,17 @@ func (a *ClaudeAdapter) BuildCommand(config *CLIConfig) *exec.Cmd {
 		args = append(args, "--output-format", "stream-json")
 	}
 
+	// Include partial messages for real-time streaming
+	// This shows intermediate thinking and partial responses
+	args = append(args, "--include-partial-messages")
+
 	// File parameters
 	for _, file := range config.Files {
 		args = append(args, "--add-dir", file)
 	}
 
-	// Task description as last parameter
-	if config.Task != "" {
-		args = append(args, config.Task)
-	}
+	// Note: Task is sent via stdin in interactive mode
+	// Don't pass it as command line argument
 
 	// Use custom CLI path if specified
 	cliPath := a.cliPath

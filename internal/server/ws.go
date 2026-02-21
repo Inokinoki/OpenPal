@@ -326,6 +326,7 @@ func (s *WebSocketServer) forwardStream(reader io.Reader, eventType string) {
 			if err != io.EOF {
 				s.errorCh <- fmt.Errorf("read error: %w", err)
 			}
+			log.Printf("[DEBUG] forwardStream: Read ended - n=%d, err=%v", n, err)
 			break
 		}
 
@@ -333,19 +334,27 @@ func (s *WebSocketServer) forwardStream(reader io.Reader, eventType string) {
 			continue
 		}
 
+		// DEBUG: Log received data
+		log.Printf("[DEBUG] forwardStream: Received %d bytes (%s): %s", n, eventType, string(buf[:n]))
+
 		lines := splitLines(buf[:n])
 		for _, line := range lines {
 			if len(line) == 0 {
 				continue
 			}
 
+			log.Printf("[DEBUG] forwardStream: Processing line: %s", string(line))
+
 			// Try to parse JSON
 			var data interface{}
 			if err := json.Unmarshal(line, &data); err != nil {
 				// Non-JSON, treat as text
+				log.Printf("[DEBUG] forwardStream: Non-JSON line, treating as text")
 				data = map[string]interface{}{
 					"content": string(line),
 				}
+			} else {
+				log.Printf("[DEBUG] forwardStream: JSON parsed successfully: %v", data)
 			}
 
 			// AddtoState manager
@@ -357,14 +366,19 @@ func (s *WebSocketServer) forwardStream(reader io.Reader, eventType string) {
 
 			if err := s.stateMgr.AddOutput(s.taskID, event); err != nil {
 				s.errorCh <- fmt.Errorf("failed to add output: %w", err)
+				log.Printf("[DEBUG] forwardStream: Failed to add output: %v", err)
+			} else {
+				log.Printf("[DEBUG] forwardStream: Output added to state manager")
 			}
 
 			// Sendtobroadcast channel
 			select {
 			case s.broadcastCh <- event:
+				log.Printf("[DEBUG] forwardStream: Event broadcast successfully")
 			default:
 				// Channel full, log error
 				s.errorCh <- errors.New("broadcast channel full")
+				log.Printf("[DEBUG] forwardStream: Broadcast channel full")
 			}
 		}
 	}
@@ -624,6 +638,25 @@ func (s *WebSocketServer) handleCommand(msg ClientMessage, client *WebSocketClie
 				"timestamp": time.Now().UnixMilli(),
 			},
 		})
+
+	case "start_task":
+		log.Printf("[DEBUG] Processing start_task command")
+		// Send task to CLI (if CLI accepts task via stdin)
+		if s.cli != nil && s.cli.Stdin != nil {
+			if task, ok := msg.Data["task"].(string); ok {
+				log.Printf("[DEBUG] Sending task to CLI: %s", task)
+				if _, err := s.cli.Stdin.Write([]byte(task + "\n")); err != nil {
+					s.errorCh <- fmt.Errorf("failed to send task: %w", err)
+					log.Printf("[DEBUG] Failed to send task: %v", err)
+				} else {
+					log.Printf("[DEBUG] Task sent successfully to CLI")
+				}
+			} else {
+				log.Printf("[DEBUG] No task in message data: %v", msg.Data)
+			}
+		} else {
+			log.Printf("[DEBUG] CLI or Stdin is nil")
+		}
 
 	case "send_input":
 		log.Printf("[DEBUG] Processing send_input command")
