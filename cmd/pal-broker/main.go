@@ -27,6 +27,7 @@ var (
 	capabilities = flag.String("capabilities", "", "comma-separated list of capabilities")
 	supportsACP  = flag.Bool("supports-acp", false, "CLI supports ACP protocol")
 	supportsJSON = flag.Bool("supports-json", false, "CLI supports JSON stream output")
+	saveHistory  = flag.Bool("save-history", false, "save CLI interaction history to file")
 	envFile      = flag.String("env-file", ".env", "path to .env file")
 )
 
@@ -158,7 +159,7 @@ func main() {
 	statusMgr.UpdateAgentStatus("running", cli.Pid, 0)
 
 	// Start WebSocket server
-	wsServer := server.NewWebSocketServer(stateMgr, id, cli)
+	wsServer := server.NewWebSocketServer(stateMgr, id, cli, *saveHistory, *sessionDir)
 	port, err := wsServer.Start(*portFlag)
 	if err != nil {
 		log.Fatalf("Failed to start WebSocket server on %s: %v", *portFlag, err)
@@ -190,6 +191,9 @@ func main() {
 	if err := cli.Stop(); err != nil {
 		log.Printf("Warning: failed to stop AI CLI: %v", err)
 	}
+
+	// Close history file if open
+	wsServer.Stop()
 
 	// Update status
 	statusMgr.SetStopped()

@@ -9,6 +9,8 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -126,6 +128,7 @@ type WebSocketServer struct {
 	mu          sync.RWMutex
 	broadcastCh chan state.Event
 	errorCh     chan error
+	historyFile *os.File // File for saving CLI interaction history
 	config      ClientConfig
 	ctx         context.Context
 	cancel      context.CancelFunc
@@ -145,8 +148,25 @@ type ServerEvent struct {
 }
 
 // NewWebSocketServer Create WebSocket server
-func NewWebSocketServer(stateMgr *state.Manager, taskID string, cli *adapter.CLIProcess) *WebSocketServer {
+func NewWebSocketServer(stateMgr *state.Manager, taskID string, cli *adapter.CLIProcess, saveHistory bool, sessionDir string) *WebSocketServer {
 	ctx, cancel := context.WithCancel(context.Background())
+
+	var historyFile *os.File
+	if saveHistory {
+		// Create history file in session directory
+		historyPath := filepath.Join(sessionDir, taskID, "history.log")
+		if err := os.MkdirAll(filepath.Dir(historyPath), 0755); err != nil {
+			log.Printf("Warning: failed to create history directory: %v", err)
+		} else {
+			var err error
+			historyFile, err = os.OpenFile(historyPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+			if err != nil {
+				log.Printf("Warning: failed to create history file: %v", err)
+			} else {
+				log.Printf("History file created: %s", historyPath)
+			}
+		}
+	}
 
 	return &WebSocketServer{
 		stateMgr:    stateMgr,
@@ -155,6 +175,7 @@ func NewWebSocketServer(stateMgr *state.Manager, taskID string, cli *adapter.CLI
 		clients:     make(map[string]*WebSocketClient),
 		broadcastCh: make(chan state.Event, 100), // bufferedChannel
 		errorCh:     make(chan error, 10),
+		historyFile: historyFile,
 		config: ClientConfig{
 			EnableCompression: true,
 			EnableHeartbeat:   true,
@@ -226,6 +247,12 @@ func (s *WebSocketServer) Stop() error {
 
 	// Wait for all goroutines
 	s.wg.Wait()
+
+	// Close history file if open
+	if s.historyFile != nil {
+		s.historyFile.Close()
+		log.Printf("History file closed")
+	}
 
 	log.Println("WebSocket server stopped")
 	return nil
@@ -346,6 +373,12 @@ func (s *WebSocketServer) forwardStream(reader io.Reader, eventType string) {
 		for _, line := range lines {
 			if len(line) == 0 {
 				continue
+			}
+
+			// Save to history file if enabled
+			if s.historyFile != nil {
+				timestamp := time.Now().Format("2006-01-02 15:04:05")
+				fmt.Fprintf(s.historyFile, "[%s] [%s] %s\n", timestamp, eventType, string(line))
 			}
 
 			// Try to parse JSON
