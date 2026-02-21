@@ -66,6 +66,7 @@ type WebSocketClient struct {
 	LastSeq         int64
 	ReconnectCount  int
 	mu              sync.RWMutex
+	writeMu         sync.Mutex // Protects WebSocket write operations
 	isClosed        bool
 	reconnectCtx    context.Context
 	reconnectCancel context.CancelFunc
@@ -576,8 +577,13 @@ func (s *WebSocketServer) sendPing(client *WebSocketClient) {
 				return
 			}
 
+			// Protect write operations with mutex
+			client.writeMu.Lock()
 			client.Conn.SetWriteDeadline(time.Now().Add(WriteTimeout))
-			if err := client.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+			err := client.Conn.WriteMessage(websocket.PingMessage, nil)
+			client.writeMu.Unlock()
+
+			if err != nil {
 				// Mark client as closed to stop further attempts
 				client.SetClosed()
 				return
@@ -708,8 +714,13 @@ func (s *WebSocketServer) broadcastToClients(event state.Event) {
 			continue
 		}
 
+		// Protect write operations with mutex
+		client.writeMu.Lock()
 		client.Conn.SetWriteDeadline(time.Now().Add(WriteTimeout))
-		if err := client.Conn.WriteJSON(event); err != nil {
+		err := client.Conn.WriteJSON(event)
+		client.writeMu.Unlock()
+
+		if err != nil {
 			s.errorCh <- fmt.Errorf("failed to broadcast to %s: %w", deviceID, err)
 			// Notimmediatelydisconnect，let listen goroutine Handle
 		}
@@ -731,6 +742,14 @@ func (s *WebSocketServer) sendToClient(deviceID string, data interface{}) {
 
 	if !exists {
 		s.errorCh <- fmt.Errorf("%s: %w", deviceID, ErrClientNotFound)
+		return
+	}
+
+	// Protect write operations with mutex
+	client.writeMu.Lock()
+	defer client.writeMu.Unlock()
+
+	if client.IsClosed() {
 		return
 	}
 
