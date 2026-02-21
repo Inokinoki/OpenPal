@@ -1,11 +1,12 @@
 # pal-broker Makefile
 # Common operations for development and deployment
 
-.PHONY: help build build-ws-test test clean install run fmt lint vet race coverage deps version
+.PHONY: help build build-ws-test build-ws-debug test clean install run fmt lint vet race coverage deps version
 
 # Variables
 BINARY_NAME=pal-broker
 WS_TEST_NAME=ws-test
+WS_DEBUG_NAME=ws-debug
 VERSION=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 BUILD_TIME=$(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 GIT_COMMIT=$(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -23,6 +24,7 @@ help:
 	@echo "Targets:"
 	@echo "  build       Build the binary (default)"
 	@echo "  build-ws-test  Build WebSocket test CLI"
+	@echo "  build-ws-debug Build WebSocket debug TUI"
 	@echo "  test        Run tests"
 	@echo "  clean       Clean build artifacts"
 	@echo "  install     Install binary to /usr/local/bin"
@@ -56,6 +58,14 @@ build-ws-test:
 	@echo ""
 	@echo "✅ Build complete: ./${WS_TEST_NAME}"
 	@ls -lh ${WS_TEST_NAME}
+
+# Build WebSocket debug TUI
+build-ws-debug:
+	@echo "Building ${WS_DEBUG_NAME}..."
+	CGO_ENABLED=0 go build -o ${WS_DEBUG_NAME} ./cmd/ws-debug
+	@echo ""
+	@echo "✅ Build complete: ./${WS_DEBUG_NAME}"
+	@ls -lh ${WS_DEBUG_NAME}
 
 # Build for specific platform
 build-linux:
@@ -115,6 +125,7 @@ clean:
 	rm -f ${BINARY_NAME}
 	rm -f ${BINARY_NAME}-*
 	rm -f ${WS_TEST_NAME}
+	rm -f ${WS_DEBUG_NAME}
 	rm -f coverage.out
 	rm -rf dist/
 	@echo "✅ Clean complete"
@@ -253,3 +264,4 @@ tavern-help:
 ws-test: build-ws-test
 	@echo "Running WebSocket test..."
 	./${WS_TEST_NAME} ${ARGS}
+
