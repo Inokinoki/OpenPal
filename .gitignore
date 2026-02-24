@@ -36,3 +36,7 @@ ws_port
 # Markdown files (except AGENTS.md)
 *.md
 !AGENTS.md
+
+# Secrets
+.pal-broker-secrets
+*.env
