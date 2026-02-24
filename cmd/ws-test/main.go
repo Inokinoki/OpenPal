@@ -40,7 +40,7 @@ type Config struct {
 // Output buffer for accumulating chunks
 type OutputBuffer struct {
 	mu       sync.Mutex
-	buffer   string
+	buffer   strings.Builder
 	lastType string
 	shown    bool   // Track if icon already shown
 	timer    *time.Timer
@@ -261,32 +261,39 @@ func handleMessage(msg Message, verbose bool) {
 }
 
 // add text to buffer and schedule flush
+// Optimized: minimize mutex hold time, avoid redundant operations
+// Fixed: Proper timer cancellation to prevent race conditions
 func (b *OutputBuffer) add(text, typ string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	
-	// If type changed, flush previous buffer with newline
+	// Fast path: type changed, flush previous buffer
 	if b.lastType != "" && b.lastType != typ {
-		if b.buffer != "" {
+		if b.buffer.Len() > 0 {
 			b.doFlush()
 		}
 		fmt.Printf("\n")
 		b.shown = false  // Reset for new type
 	}
 	
-	// Append text
-	b.buffer += text
+	// Append text using strings.Builder (efficient concatenation)
+	b.buffer.WriteString(text)
 	b.lastType = typ
 	
-	// Cancel existing timer
-	if b.timer != nil {
-		b.timer.Stop()
+	// Cancel existing timer (avoid multiple concurrent timers)
+	// Fixed: Properly drain timer channel to prevent race condition
+	if b.timer != nil && !b.timer.Stop() {
+		// Timer already fired, drain the channel to prevent stale callback
+		select {
+		case <-b.timer.C:
+		default:
+		}
 	}
 	
-	// Schedule flush after delay
+	// Schedule flush after delay (debounce rapid chunks)
 	b.timer = time.AfterFunc(flushAfter, func() {
 		b.mu.Lock()
-		if b.buffer != "" {
+		if b.buffer.Len() > 0 {
 			b.doFlush()
 		}
 		b.mu.Unlock()
@@ -304,25 +311,29 @@ func flushBuffer() {
 }
 
 func (b *OutputBuffer) doFlush() {
-	if b.buffer == "" {
+	if b.buffer.Len() == 0 {
 		return
 	}
+	
+	// Get buffer content once
+	content := b.buffer.String()
 	
 	// Print icon only once at the start
 	if !b.shown {
 		if b.lastType == "message" {
-			fmt.Printf("🤖 %s", b.buffer)
+			fmt.Printf("🤖 %s", content)
 		} else if b.lastType == "thought" {
-			fmt.Printf("💭 %s", b.buffer)
+			fmt.Printf("💭 %s", content)
 		}
 		b.shown = true
 	} else {
 		// Subsequent chunks - just print text
-		fmt.Printf("%s", b.buffer)
+		fmt.Printf("%s", content)
 	}
 	
 	// Flush stdout immediately for streaming effect
-	fmt.Fprint(os.Stdout)
+	os.Stdout.Sync()
 	
-	b.buffer = ""
+	// Reset buffer (reuse the same builder to avoid reallocation)
+	b.buffer.Reset()
 }

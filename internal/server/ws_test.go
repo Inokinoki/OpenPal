@@ -51,7 +51,7 @@ func TestWebSocketClientMethods(t *testing.T) {
 // TestWebSocketServerCreation Test WebSocketServer creation
 func TestWebSocketServerCreation(t *testing.T) {
 	stateMgr := state.NewManager("/tmp/test-ws-creation")
-	server := NewWebSocketServer(stateMgr, "test_task", nil)
+	server := NewWebSocketServer(stateMgr, "test_task", nil, false, "/tmp/test-ws-creation")
 
 	if server == nil {
 		t.Fatal("Expected non-nil server")
@@ -77,7 +77,7 @@ func TestWebSocketServerCreation(t *testing.T) {
 // TestServerStartAndStop Test server start and stop
 func TestServerStartAndStop(t *testing.T) {
 	stateMgr := state.NewManager("/tmp/test-ws-startstop")
-	server := NewWebSocketServer(stateMgr, "test_task", nil)
+	server := NewWebSocketServer(stateMgr, "test_task", nil, false, "/tmp/test-ws")
 
 	// StartServer
 	port, err := server.Start(":0")
@@ -106,7 +106,7 @@ func TestServerStartAndStop(t *testing.T) {
 // TestBroadcastChannel Test broadcast channel
 func TestBroadcastChannel(t *testing.T) {
 	stateMgr := state.NewManager("/tmp/test-broadcast-channel")
-	server := NewWebSocketServer(stateMgr, "test", nil)
+	server := NewWebSocketServer(stateMgr, "test", nil, false, "/tmp/test-ws")
 
 	// StartBroadcastHandleer
 	server.wg.Add(1)
@@ -135,7 +135,7 @@ func TestBroadcastChannel(t *testing.T) {
 // TestErrorHandler Test error handler
 func TestErrorHandler(t *testing.T) {
 	stateMgr := state.NewManager("/tmp/test-error-handler")
-	server := NewWebSocketServer(stateMgr, "test", nil)
+	server := NewWebSocketServer(stateMgr, "test", nil, false, "/tmp/test-ws")
 
 	// StartErrorHandleer
 	server.wg.Add(1)
@@ -167,7 +167,7 @@ func (e *testError) Error() string {
 // TestAddRemoveClient Test add and remove client
 func TestAddRemoveClient(t *testing.T) {
 	stateMgr := state.NewManager("/tmp/test-client-mgmt")
-	server := NewWebSocketServer(stateMgr, "test", nil)
+	server := NewWebSocketServer(stateMgr, "test", nil, false, "/tmp/test-ws")
 
 	client := &WebSocketClient{
 		DeviceID:    "test_device",
@@ -203,7 +203,7 @@ func TestAddRemoveClient(t *testing.T) {
 // TestConcurrentClientAccess Test concurrent client access
 func TestConcurrentClientAccess(t *testing.T) {
 	stateMgr := state.NewManager("/tmp/test-concurrent-access")
-	server := NewWebSocketServer(stateMgr, "test", nil)
+	server := NewWebSocketServer(stateMgr, "test", nil, false, "/tmp/test-ws")
 
 	var wg sync.WaitGroup
 	numGoroutines := 10
@@ -248,7 +248,7 @@ func TestConcurrentClientAccess(t *testing.T) {
 func TestBroadcastToClients(t *testing.T) {
 	// This test needs real WebSocket, testing logic only
 	stateMgr := state.NewManager("/tmp/test-broadcast")
-	server := NewWebSocketServer(stateMgr, "test", nil)
+	server := NewWebSocketServer(stateMgr, "test", nil, false, "/tmp/test-ws")
 
 	event := state.Event{
 		Type:      "chunk",
@@ -275,9 +275,9 @@ func TestSplitLines(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		lines := splitLines([]byte(test.input))
+		lines := splitLinesCopy([]byte(test.input))
 		if len(lines) != test.expected {
-			t.Errorf("splitLines(%q) returned %d lines, expected %d", test.input, len(lines), test.expected)
+			t.Errorf("splitLinesCopy(%q) returned %d lines, expected %d", test.input, len(lines), test.expected)
 		}
 	}
 }
@@ -303,32 +303,14 @@ func TestClientMessageUnmarshal(t *testing.T) {
 
 // TestServerEvent Test server event
 func TestServerEvent(t *testing.T) {
-	event := ServerEvent{
-		Event: state.Event{
-			Type: "chunk",
-			Data: map[string]string{"content": "test"},
-		},
-		DeviceID: "test_device",
+	// Test state.Event directly (ServerEvent was removed)
+	event := state.Event{
+		Type: "chunk",
+		Data: map[string]interface{}{"content": "test"},
 	}
 
-	if event.DeviceID != "test_device" {
-		t.Errorf("Expected device_id='test_device', got %s", event.DeviceID)
-	}
-}
-
-// TestRandomString Test random string generation
-func TestRandomString(t *testing.T) {
-	str := randomString(10)
-
-	if len(str) != 10 {
-		t.Errorf("Expected length 10, got %d", len(str))
-	}
-
-	// Verify only alphanumeric
-	for _, c := range str {
-		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
-			t.Errorf("Invalid character in random string: %c", c)
-		}
+	if event.Type != "chunk" {
+		t.Errorf("Expected type='chunk', got %s", event.Type)
 	}
 }
 
@@ -354,7 +336,7 @@ func TestHealthEndpoint(t *testing.T) {
 	t.Skip("Skipping: HTTP handler registration conflict in tests")
 
 	stateMgr := state.NewManager("/tmp/test-health")
-	server := NewWebSocketServer(stateMgr, "test_task", nil)
+	server := NewWebSocketServer(stateMgr, "test_task", nil, false, "/tmp/test-ws")
 
 	// StartServer
 	port, err := server.Start(":0")
@@ -436,7 +418,7 @@ func TestErrorDefinitions(t *testing.T) {
 // TestServerConfig Test server config
 func TestServerConfig(t *testing.T) {
 	stateMgr := state.NewManager("/tmp/test-config")
-	server := NewWebSocketServer(stateMgr, "test", nil)
+	server := NewWebSocketServer(stateMgr, "test", nil, false, "/tmp/test-ws")
 
 	// Verify default config
 	if !server.config.EnableCompression {
@@ -455,7 +437,7 @@ func TestServerConfig(t *testing.T) {
 // TestConcurrentBroadcast Test concurrent broadcast
 func TestConcurrentBroadcast(t *testing.T) {
 	stateMgr := state.NewManager("/tmp/test-concurrent-broadcast")
-	server := NewWebSocketServer(stateMgr, "test", nil)
+	server := NewWebSocketServer(stateMgr, "test", nil, false, "/tmp/test-ws")
 
 	// StartBroadcastHandleer
 	server.wg.Add(1)

@@ -8,12 +8,22 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"pal-broker/internal/adapter"
 	"pal-broker/internal/server"
 	"pal-broker/internal/state"
+)
+
+// Build metadata (set via ldflags during build)
+var (
+	Version   = "dev"
+	BuildTime = "unknown"
+	GitCommit = "unknown"
 )
 
 var (
@@ -29,10 +39,17 @@ var (
 	supportsJSON = flag.Bool("supports-json", false, "CLI supports JSON stream output")
 	saveHistory  = flag.Bool("save-history", false, "save CLI interaction history to file")
 	envFile      = flag.String("env-file", ".env", "path to .env file")
+	showVersion  = flag.Bool("version", false, "show version and build info")
 )
 
 func main() {
 	flag.Parse()
+
+	// Show version info if requested
+	if *showVersion {
+		printVersion()
+		os.Exit(0)
+	}
 
 	// Load environment variables from .env file
 	if *envFile != "" {
@@ -88,18 +105,8 @@ func main() {
 		log.Fatalf("Failed to create session directory %s: %v", dir, err)
 	}
 
-	// Log configuration
-	log.Printf("Starting pal-broker for quest %s", id)
-	log.Printf("Provider: %s", prov)
-	if *cliPath != "" {
-		log.Printf("CLI Path: %s", *cliPath)
-	}
-	log.Printf("Work Dir: %s", *workDir)
-	if *capabilities != "" {
-		log.Printf("Capabilities: %s", *capabilities)
-	}
-	log.Printf("Supports ACP: %v", *supportsACP)
-	log.Printf("Supports JSON: %v", *supportsJSON)
+	// Log startup info with structured format
+	log.Print(formatStartupLog(id, prov, *workDir, *supportsACP, *supportsJSON))
 
 	// Initialize state manager
 	stateMgr := state.NewManager(*sessionDir)
@@ -115,30 +122,36 @@ func main() {
 
 	// Save pal-broker PID
 	pidFile := filepath.Join(dir, "bridge.pid")
-	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", os.Getpid())), 0644); err != nil {
+	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
 		log.Printf("Warning: failed to write PID file: %v", err)
 	}
 
 	// Initialize CLI adapter
 	cliAdapter := adapter.NewAdapter(prov, *workDir)
+	log.Printf("Adapter initialized: provider=%s, mode=%v, supportsACP=%v", 
+		prov, cliAdapter.GetMode(), cliAdapter.GetMode() == adapter.ModeACP)
 
 	// Set CLI path if specified
 	if *cliPath != "" {
 		cliAdapter.SetCLIPath(*cliPath)
+		log.Printf("Custom CLI path set: %s", *cliPath)
 	}
 
 	// Set capabilities if specified
 	if *capabilities != "" {
 		caps := strings.Split(*capabilities, ",")
 		cliAdapter.SetCapabilities(caps)
+		log.Printf("Custom capabilities set: %v", caps)
 	}
 
 	// Set feature flags
 	if *supportsACP {
 		cliAdapter.EnableACP()
+		log.Printf("ACP mode enabled via flag")
 	}
 	if *supportsJSON {
 		cliAdapter.EnableJSONStream()
+		log.Printf("JSON stream mode enabled via flag")
 	}
 
 	// Start WebSocket server (CLI not started yet)
@@ -152,7 +165,7 @@ func main() {
 
 	// Save WebSocket port to file
 	portFile := filepath.Join(dir, "ws_port")
-	if err := os.WriteFile(portFile, []byte(fmt.Sprintf("%d", port)), 0644); err != nil {
+	if err := os.WriteFile(portFile, []byte(strconv.Itoa(port)), 0644); err != nil {
 		log.Fatalf("Failed to write port file %s: %v", portFile, err)
 	}
 	log.Printf("Port file written to: %s", portFile)
@@ -169,6 +182,9 @@ func main() {
 
 	// Update status
 	statusMgr.SetStopped()
+
+	// Clean up status manager resources (flush pending writes, stop timer)
+	statusMgr.Close()
 
 	log.Println("Cleanup completed, exiting")
 	os.Exit(0)
@@ -236,11 +252,31 @@ func autoDetectProvider(provider string) {
 		switch provider {
 		case "claude":
 			*supportsJSON = true // Claude supports JSON stream
+		case "codex":
+			*supportsJSON = true // Codex may support JSON
 		}
 	}
 }
 
-// stringPtr - Helper to create string pointer
-func stringPtr(s string) *string {
-	return &s
+// printVersion - Print version and build information
+func printVersion() {
+	fmt.Printf("pal-broker version %s\n", Version)
+	fmt.Printf("  Build time: %s\n", BuildTime)
+	fmt.Printf("  Git commit: %s\n", GitCommit)
+	fmt.Printf("  Go version: %s\n", runtime.Version())
+	fmt.Printf("  Platform: %s/%s\n", runtime.GOOS, runtime.GOARCH)
+}
+
+// formatStartupLog - Format startup log with structured info
+func formatStartupLog(id, provider, workDir string, supportsACP, supportsJSON bool) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("🚀 pal-broker v%s starting\n", Version))
+	sb.WriteString(fmt.Sprintf("   Quest ID: %s\n", id))
+	sb.WriteString(fmt.Sprintf("   Provider: %s\n", provider))
+	sb.WriteString(fmt.Sprintf("   Work Dir: %s\n", workDir))
+	sb.WriteString(fmt.Sprintf("   ACP Mode: %v\n", supportsACP))
+	sb.WriteString(fmt.Sprintf("   JSON Stream: %v\n", supportsJSON))
+	sb.WriteString(fmt.Sprintf("   PID: %d\n", os.Getpid()))
+	sb.WriteString(fmt.Sprintf("   Time: %s\n", time.Now().Format(time.RFC3339)))
+	return sb.String()
 }

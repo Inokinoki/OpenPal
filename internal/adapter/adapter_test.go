@@ -8,13 +8,15 @@ import (
 // TestClaudeAdapterSupportsJSONStream Test Claude adapter JSON Stream support
 func TestClaudeAdapterSupportsJSONStream(t *testing.T) {
 	adapter := &ClaudeAdapter{
-		config: &CLIConfig{
-			Provider: "claude",
-			WorkDir:  "/tmp",
+		BaseAdapter: BaseAdapter{
+			config: &CLIConfig{
+				Provider: "claude",
+				WorkDir:  "/tmp",
+			},
 		},
 	}
 
-	// Claude ShouldSupport JSON Stream
+	// Claude Should Support JSON Stream
 	if !adapter.SupportsJSONStream() {
 		t.Error("Expected Claude adapter to support JSON Stream")
 	}
@@ -23,39 +25,44 @@ func TestClaudeAdapterSupportsJSONStream(t *testing.T) {
 // TestClaudeAdapterBuildCommand Test Claude command building
 func TestClaudeAdapterBuildCommand(t *testing.T) {
 	adapter := &ClaudeAdapter{
-		config: &CLIConfig{
-			Provider: "claude",
-			WorkDir:  "/workspace",
-			Task:     "Refactor this code",
-			Files:    []string{"src/main.go", "src/utils.go"},
+		BaseAdapter: BaseAdapter{
+			config: &CLIConfig{
+				Provider: "claude",
+				WorkDir:  "/workspace",
+				Task:     "Refactor this code",
+				Files:    []string{"src/main.go", "src/utils.go"},
+			},
 		},
 	}
 
 	cmd := adapter.BuildCommand(adapter.config)
 
-	// Verify command
-	if cmd.Path != "claude" {
-		t.Errorf("Expected command 'claude', got %s", cmd.Path)
+	// Verify command (check basename since PATH may expand to full path)
+	if !strings.HasSuffix(cmd.Path, "claude") {
+		t.Errorf("Expected command ending with 'claude', got %s", cmd.Path)
 	}
 
-	// Verify parameters include -p and --output-format
+	// Verify parameters include --output-format stream-json and --input-format stream-json
 	args := strings.Join(cmd.Args, " ")
-	if !strings.Contains(args, "-p") {
-		t.Error("Expected -p flag for print mode")
-	}
 	if !strings.Contains(args, "--output-format") {
 		t.Error("Expected --output-format flag")
 	}
 	if !strings.Contains(args, "stream-json") {
 		t.Error("Expected stream-json format")
 	}
+	if !strings.Contains(args, "--input-format") {
+		t.Error("Expected --input-format flag")
+	}
+	// Note: -p flag is not used in interactive stream-json mode
 }
 
 // TestClaudeAdapterParseMessage Test Claude message parsing
 func TestClaudeAdapterParseMessage(t *testing.T) {
 	adapter := &ClaudeAdapter{
-		config: &CLIConfig{
-			Provider: "claude",
+		BaseAdapter: BaseAdapter{
+			config: &CLIConfig{
+				Provider: "claude",
+			},
 		},
 	}
 
@@ -70,7 +77,7 @@ func TestClaudeAdapterParseMessage(t *testing.T) {
 		t.Errorf("Expected type=assistant, got %v", parsed["type"])
 	}
 
-	// TestTextMessage
+	// Test Text Message
 	textMsg := "Let me analyze this code..."
 	parsed, err = adapter.ParseMessage(textMsg)
 	if err != nil {
@@ -85,9 +92,11 @@ func TestClaudeAdapterParseMessage(t *testing.T) {
 // TestCodexAdapterSupportsJSONStream Test Codex adapter with Mock
 func TestCodexAdapterSupportsJSONStream(t *testing.T) {
 	adapter := &CodexAdapter{
-		config: &CLIConfig{
-			Provider: "codex",
-			WorkDir:  "/tmp",
+		BaseAdapter: BaseAdapter{
+			config: &CLIConfig{
+				Provider: "codex",
+				WorkDir:  "/tmp",
+			},
 		},
 	}
 
@@ -99,10 +108,12 @@ func TestCodexAdapterSupportsJSONStream(t *testing.T) {
 // TestCodexAdapterBuildCommand Test Codex command building
 func TestCodexAdapterBuildCommand(t *testing.T) {
 	adapter := &CodexAdapter{
-		config: &CLIConfig{
-			Provider: "codex",
-			WorkDir:  "/workspace",
-			Task:     "Fix the bug",
+		BaseAdapter: BaseAdapter{
+			config: &CLIConfig{
+				Provider: "codex",
+				WorkDir:  "/workspace",
+				Task:     "Fix the bug",
+			},
 		},
 	}
 
@@ -123,12 +134,14 @@ func TestCodexAdapterBuildCommand(t *testing.T) {
 // TestCopilotAdapterACP Test Copilot ACP support
 func TestCopilotAdapterACP(t *testing.T) {
 	adapter := &CopilotAdapter{
-		config: &CLIConfig{
-			Provider: "copilot",
+		BaseAdapter: BaseAdapter{
+			config: &CLIConfig{
+				Provider: "copilot",
+			},
 		},
 	}
 
-	// Copilot does not support ACP（WillFallbackto text Mode）
+	// Copilot does not support ACP (Will Fallback to text Mode)
 	if adapter.SupportsACP() {
 		t.Error("Copilot adapter should not support ACP in text mode")
 	}
@@ -137,8 +150,10 @@ func TestCopilotAdapterACP(t *testing.T) {
 // TestGenericAdapter Test generic adapter
 func TestGenericAdapter(t *testing.T) {
 	adapter := &GenericAdapter{
-		config: &CLIConfig{
-			Provider: "unknown-cli",
+		BaseAdapter: BaseAdapter{
+			config: &CLIConfig{
+				Provider: "unknown-cli",
+			},
 		},
 	}
 
@@ -151,7 +166,7 @@ func TestGenericAdapter(t *testing.T) {
 		t.Error("Generic adapter should not support JSON Stream")
 	}
 
-	// TestCommandBuild
+	// Test Command Build
 	cmd := adapter.BuildCommand(adapter.config)
 	if cmd.Path != "unknown-cli" {
 		t.Errorf("Expected command 'unknown-cli', got %s", cmd.Path)
@@ -221,10 +236,12 @@ func TestAdapterInterface(t *testing.T) {
 // TestParseMessageError Test error message parsing
 func TestParseMessageError(t *testing.T) {
 	adapter := &ClaudeAdapter{
-		config: &CLIConfig{},
+		BaseAdapter: BaseAdapter{
+			config: &CLIConfig{},
+		},
 	}
 
-	// Testinvalid JSON
+	// Test invalid JSON
 	invalidJSON := `{"type": "chunk", invalid}`
 	parsed, err := adapter.ParseMessage(invalidJSON)
 	if err != nil {

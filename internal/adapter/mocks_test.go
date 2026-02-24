@@ -38,10 +38,12 @@ echo '{"type":"chunk","content":"This is a test response"}'
 
 	// Create adapter
 	adapter := &ClaudeAdapter{
-		config: &CLIConfig{
-			Provider: "claude",
-			WorkDir:  "/tmp",
-			Task:     "Test task",
+		BaseAdapter: BaseAdapter{
+			config: &CLIConfig{
+				Provider: "claude",
+				WorkDir:  "/tmp",
+				Task:     "Test task",
+			},
 		},
 	}
 
@@ -70,8 +72,10 @@ echo '{"type":"chunk","content":"This is a test response"}'
 // TestClaudeAdapterMockOutput Test Claude output parsing
 func TestClaudeAdapterMockOutput(t *testing.T) {
 	adapter := &ClaudeAdapter{
-		config: &CLIConfig{
-			Provider: "claude",
+		BaseAdapter: BaseAdapter{
+			config: &CLIConfig{
+				Provider: "claude",
+			},
 		},
 	}
 
@@ -144,10 +148,12 @@ echo '{"message":{"role":"assistant","content":"Codex response"}}'
 	defer os.Setenv("PATH", oldPath)
 
 	adapter := &CodexAdapter{
-		config: &CLIConfig{
-			Provider: "codex",
-			WorkDir:  "/tmp",
-			Task:     "Fix bug",
+		BaseAdapter: BaseAdapter{
+			config: &CLIConfig{
+				Provider: "codex",
+				WorkDir:  "/tmp",
+				Task:     "Fix bug",
+			},
 		},
 	}
 
@@ -173,8 +179,10 @@ echo '{"message":{"role":"assistant","content":"Codex response"}}'
 // TestCopilotAdapterMock Test Copilot adapter with Mock
 func TestCopilotAdapterMock(t *testing.T) {
 	adapter := &CopilotAdapter{
-		config: &CLIConfig{
-			Provider: "copilot",
+		BaseAdapter: BaseAdapter{
+			config: &CLIConfig{
+				Provider: "copilot",
+			},
 		},
 	}
 
@@ -215,8 +223,10 @@ func TestCopilotAdapterMock(t *testing.T) {
 // TestGenericAdapterMock Test generic adapter
 func TestGenericAdapterMock(t *testing.T) {
 	adapter := &GenericAdapter{
-		config: &CLIConfig{
-			Provider: "unknown-cli",
+		BaseAdapter: BaseAdapter{
+			config: &CLIConfig{
+				Provider: "unknown-cli",
+			},
 		},
 	}
 
@@ -238,8 +248,10 @@ func TestGenericAdapterMock(t *testing.T) {
 // TestAdapterWithRealisticOutput Test realistic output
 func TestAdapterWithRealisticOutput(t *testing.T) {
 	adapter := &ClaudeAdapter{
-		config: &CLIConfig{
-			Provider: "claude",
+		BaseAdapter: BaseAdapter{
+			config: &CLIConfig{
+				Provider: "claude",
+			},
 		},
 	}
 
@@ -272,8 +284,10 @@ func TestAdapterWithRealisticOutput(t *testing.T) {
 // TestAdapterErrorHandling Test error handler
 func TestAdapterErrorHandling(t *testing.T) {
 	adapter := &ClaudeAdapter{
-		config: &CLIConfig{
-			Provider: "claude",
+		BaseAdapter: BaseAdapter{
+			config: &CLIConfig{
+				Provider: "claude",
+			},
 		},
 	}
 
@@ -324,7 +338,7 @@ func TestAdapterCommandBuilder(t *testing.T) {
 				WorkDir:  "/workspace",
 				Task:     "Test",
 			},
-			wantArgs: []string{"-p", "--output-format", "stream-json"},
+			wantArgs: []string{"--output-format", "stream-json", "--input-format", "stream-json"},
 		},
 		{
 			name:     "codex_basic",
@@ -343,11 +357,11 @@ func TestAdapterCommandBuilder(t *testing.T) {
 			var adapter Adapter
 			switch tt.provider {
 			case "claude":
-				adapter = &ClaudeAdapter{config: tt.config}
+				adapter = &ClaudeAdapter{BaseAdapter: BaseAdapter{config: tt.config}}
 			case "codex":
-				adapter = &CodexAdapter{config: tt.config}
+				adapter = &CodexAdapter{BaseAdapter: BaseAdapter{config: tt.config}}
 			default:
-				adapter = &GenericAdapter{config: tt.config}
+				adapter = &GenericAdapter{BaseAdapter: BaseAdapter{config: tt.config}}
 			}
 
 			cmd := adapter.BuildCommand(tt.config)
@@ -373,25 +387,25 @@ func TestAdapterCapabilities(t *testing.T) {
 	}{
 		{
 			name:           "claude",
-			adapter:        &ClaudeAdapter{config: &CLIConfig{}},
+			adapter:        &ClaudeAdapter{BaseAdapter: BaseAdapter{config: &CLIConfig{}}},
 			wantACP:        false,
 			wantJSONStream: true,
 		},
 		{
 			name:           "codex",
-			adapter:        &CodexAdapter{config: &CLIConfig{}},
+			adapter:        &CodexAdapter{BaseAdapter: BaseAdapter{config: &CLIConfig{}}},
 			wantACP:        false,
 			wantJSONStream: false,
 		},
 		{
 			name:           "copilot",
-			adapter:        &CopilotAdapter{config: &CLIConfig{}},
+			adapter:        &CopilotAdapter{BaseAdapter: BaseAdapter{config: &CLIConfig{}}},
 			wantACP:        false,
 			wantJSONStream: false,
 		},
 		{
 			name:           "generic",
-			adapter:        &GenericAdapter{config: &CLIConfig{}},
+			adapter:        &GenericAdapter{BaseAdapter: BaseAdapter{config: &CLIConfig{}}},
 			wantACP:        false,
 			wantJSONStream: false,
 		},
@@ -442,7 +456,9 @@ func TestAdapterModeDetection(t *testing.T) {
 // TestAdapterJSONParsing Test JSON parsing
 func TestAdapterJSONParsing(t *testing.T) {
 	adapter := &ClaudeAdapter{
-		config: &CLIConfig{},
+		BaseAdapter: BaseAdapter{
+			config: &CLIConfig{},
+		},
 	}
 
 	// TestComplex JSON Structure
@@ -480,7 +496,9 @@ func TestAdapterJSONParsing(t *testing.T) {
 // TestAdapterStreamProcessing Test stream processing
 func TestAdapterStreamProcessing(t *testing.T) {
 	adapter := &ClaudeAdapter{
-		config: &CLIConfig{},
+		BaseAdapter: BaseAdapter{
+			config: &CLIConfig{},
+		},
 	}
 
 	// Simulate stream output
@@ -519,8 +537,10 @@ echo "This should not appear"
 	defer os.Setenv("PATH", oldPath)
 
 	adapter := &GenericAdapter{
-		config: &CLIConfig{
-			Provider: "slow-cli",
+		BaseAdapter: BaseAdapter{
+			config: &CLIConfig{
+				Provider: "slow-cli",
+			},
 		},
 	}
 

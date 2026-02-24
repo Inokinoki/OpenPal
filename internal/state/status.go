@@ -2,9 +2,11 @@ package state
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -38,18 +40,30 @@ type TaskProgress struct {
 
 // StatusManager - Manages status files
 type StatusManager struct {
-	sessionDir string
-	mu         sync.RWMutex
-	status     *AgentStatus
-	progress   *TaskProgress
+	sessionDir    string
+	mu            sync.RWMutex
+	status        *AgentStatus
+	progress      *TaskProgress
+	filesModified map[string]struct{} // Map for O(1) duplicate check
+	
+	// Write buffering for high-frequency updates
+	pendingWrites int32 // atomic flag for pending writes
+	writeTimer    *time.Timer
+	writeMu       sync.Mutex
+	writeScheduled bool
 }
+
+// writeDelay - Delay for batching writes (100ms)
+const writeDelay = 100 * time.Millisecond
 
 // NewStatusManager - Create new status manager
 func NewStatusManager(sessionDir string) *StatusManager {
 	return &StatusManager{
-		sessionDir: sessionDir,
-		status:     &AgentStatus{},
-		progress:   &TaskProgress{},
+		sessionDir:    sessionDir,
+		status:        &AgentStatus{},
+		progress:      &TaskProgress{},
+		filesModified: make(map[string]struct{}),
+		writeTimer:    time.NewTimer(writeDelay),
 	}
 }
 
@@ -63,21 +77,23 @@ func (m *StatusManager) Initialize(questID, provider string, pid int) error {
 		return err
 	}
 
+	now := time.Now().UnixMilli() // Single time.Now() call for all timestamps
+
 	m.status = &AgentStatus{
 		State:      "initializing",
 		Provider:   provider,
 		QuestID:    questID,
 		PID:        pid,
-		StartTime:  time.Now().UnixMilli(),
-		UpdateTime: time.Now().UnixMilli(),
+		StartTime:  now,
+		UpdateTime: now,
 	}
 
 	m.progress = &TaskProgress{
 		QuestID:    questID,
 		State:      "pending",
 		Progress:   0,
-		StartTime:  time.Now().UnixMilli(),
-		UpdateTime: time.Now().UnixMilli(),
+		StartTime:  now,
+		UpdateTime: now,
 	}
 
 	return m.saveStatus()
@@ -96,46 +112,48 @@ func (m *StatusManager) UpdateAgentStatus(state string, cliPID int, wsPort int) 
 	m.saveStatus()
 }
 
-// UpdateProgress - Update task progress
+// UpdateProgress - Update task progress (uses delayed write for batching)
 func (m *StatusManager) UpdateProgress(progress int, action string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	m.progress.Progress = progress
 	m.progress.CurrentAction = action
 	m.progress.UpdateTime = time.Now().UnixMilli()
+	m.mu.Unlock()
 
-	m.saveProgress()
+	// Schedule delayed write to batch multiple updates
+	m.scheduleWrite()
 }
 
-// AddFileModified - Record a modified file
+// AddFileModified - Record a modified file (uses delayed write for batching)
 func (m *StatusManager) AddFileModified(filePath string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// Check if file already in list
-	for _, f := range m.progress.FilesModified {
-		if f == filePath {
-			return
-		}
+	
+	// O(1) duplicate check using map
+	if _, exists := m.filesModified[filePath]; exists {
+		m.mu.Unlock()
+		return
 	}
 
+	// Add to both map and slice (slice for JSON serialization, map for lookup)
+	m.filesModified[filePath] = struct{}{}
 	m.progress.FilesModified = append(m.progress.FilesModified, filePath)
 	m.progress.UpdateTime = time.Now().UnixMilli()
+	m.mu.Unlock()
 
-	m.saveProgress()
+	// Schedule delayed write to batch multiple updates
+	m.scheduleWrite()
 }
 
-// UpdateLastOutput - Update last output
+// UpdateLastOutput - Update last output (uses delayed write for batching)
 func (m *StatusManager) UpdateLastOutput(output string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	m.progress.LastOutput = output
 	m.progress.LastOutputTime = time.Now().UnixMilli()
 	m.progress.UpdateTime = time.Now().UnixMilli()
+	m.mu.Unlock()
 
-	m.saveProgress()
+	// Schedule delayed write to batch multiple updates
+	m.scheduleWrite()
 }
 
 // SetCompleted - Mark task as completed
@@ -143,11 +161,12 @@ func (m *StatusManager) SetCompleted() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	now := time.Now().UnixMilli() // Single time.Now() call for both updates
 	m.status.State = "completed"
 	m.progress.State = "completed"
 	m.progress.Progress = 100
-	m.status.UpdateTime = time.Now().UnixMilli()
-	m.progress.UpdateTime = time.Now().UnixMilli()
+	m.status.UpdateTime = now
+	m.progress.UpdateTime = now
 
 	m.saveStatus()
 	m.saveProgress()
@@ -158,11 +177,12 @@ func (m *StatusManager) SetFailed(reason string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	now := time.Now().UnixMilli() // Single time.Now() call for both updates
 	m.status.State = "failed"
 	m.progress.State = "failed"
 	m.progress.LastOutput = reason
-	m.status.UpdateTime = time.Now().UnixMilli()
-	m.progress.UpdateTime = time.Now().UnixMilli()
+	m.status.UpdateTime = now
+	m.progress.UpdateTime = now
 
 	m.saveStatus()
 	m.saveProgress()
@@ -173,10 +193,11 @@ func (m *StatusManager) SetStopped() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	now := time.Now().UnixMilli() // Single time.Now() call for both updates
 	m.status.State = "stopped"
 	m.progress.State = "stopped"
-	m.status.UpdateTime = time.Now().UnixMilli()
-	m.progress.UpdateTime = time.Now().UnixMilli()
+	m.status.UpdateTime = now
+	m.progress.UpdateTime = now
 
 	m.saveStatus()
 	m.saveProgress()
@@ -198,44 +219,114 @@ func (m *StatusManager) GetProgress() (*TaskProgress, error) {
 	return m.progress, nil
 }
 
-// saveStatus - Save status to file
-func (m *StatusManager) saveStatus() error {
-	if m.status.QuestID == "" {
+// saveJSON - Helper to save JSON data to file (reduces duplication)
+func (m *StatusManager) saveJSON(filename string, data interface{}) error {
+	// Extract questID from the data type
+	var questID string
+	switch v := data.(type) {
+	case *AgentStatus:
+		questID = v.QuestID
+	case *TaskProgress:
+		questID = v.QuestID
+	default:
+		return fmt.Errorf("unsupported data type")
+	}
+	
+	if questID == "" {
 		return nil
 	}
 
-	dir := filepath.Join(m.sessionDir, m.status.QuestID)
+	dir := filepath.Join(m.sessionDir, questID)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
 
-	statusFile := filepath.Join(dir, "status.json")
-	data, err := json.MarshalIndent(m.status, "", "  ")
+	filePath := filepath.Join(dir, filename)
+	// Use json.Marshal instead of MarshalIndent for better performance
+	// Status files are primarily machine-read; human readability is secondary
+	jsonData, err := json.Marshal(data)
 	if err != nil {
 		return err
 	}
 
-	return os.WriteFile(statusFile, data, 0644)
+	return os.WriteFile(filePath, jsonData, 0644)
 }
 
-// saveProgress - Save progress to file
+// scheduleWrite - Schedule a delayed write to batch multiple updates
+// Optimized: reduces I/O by batching writes within writeDelay window
+// Uses atomic operations for lock-free scheduling check
+func (m *StatusManager) scheduleWrite() {
+	// Fast path: check if write already scheduled (atomic, no lock)
+	if atomic.LoadInt32(&m.pendingWrites) == 1 {
+		return
+	}
+	
+	// Try to claim the write slot
+	if !atomic.CompareAndSwapInt32(&m.pendingWrites, 0, 1) {
+		return // Another goroutine claimed it
+	}
+	
+	m.writeMu.Lock()
+	
+	// Safety check: don't schedule if already closed
+	if m.writeTimer == nil {
+		atomic.StoreInt32(&m.pendingWrites, 0)
+		m.writeMu.Unlock()
+		return
+	}
+	
+	// Reset and start timer (inline timer reset to avoid extra goroutine)
+	if !m.writeTimer.Stop() {
+		select {
+		case <-m.writeTimer.C:
+		default:
+		}
+	}
+	m.writeTimer.Reset(writeDelay)
+	m.writeScheduled = true
+	
+	m.writeMu.Unlock()
+	// Timer will fire and call flushWrites directly - no extra goroutine needed
+}
+
+// flushWrites - Flush pending writes to disk
+func (m *StatusManager) flushWrites() {
+	m.writeMu.Lock()
+	defer m.writeMu.Unlock()
+	
+	// Save both status and progress together
+	m.saveStatusLocked()
+	m.saveProgressLocked()
+	
+	atomic.StoreInt32(&m.pendingWrites, 0)
+	m.writeScheduled = false
+}
+
+// saveStatusLocked - Save status without acquiring main mutex
+func (m *StatusManager) saveStatusLocked() error {
+	return m.saveJSON("status.json", m.status)
+}
+
+// saveProgressLocked - Save progress without acquiring main mutex
+func (m *StatusManager) saveProgressLocked() error {
+	return m.saveJSON("progress.json", m.progress)
+}
+
+// saveStatus - Save status to file (immediate)
+func (m *StatusManager) saveStatus() error {
+	return m.saveJSON("status.json", m.status)
+}
+
+// saveProgress - Save progress to file (immediate)
 func (m *StatusManager) saveProgress() error {
-	if m.progress.QuestID == "" {
-		return nil
-	}
+	return m.saveJSON("progress.json", m.progress)
+}
 
-	dir := filepath.Join(m.sessionDir, m.progress.QuestID)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
+// Flush - Force flush pending writes immediately
+func (m *StatusManager) Flush() {
+	if atomic.LoadInt32(&m.pendingWrites) == 1 {
+		m.flushWrites()
 	}
-
-	progressFile := filepath.Join(dir, "progress.json")
-	data, err := json.MarshalIndent(m.progress, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	return os.WriteFile(progressFile, data, 0644)
 }
 
 // ReadStatusFromFile - Read status from file (for Tavern)
@@ -268,4 +359,20 @@ func ReadProgressFromFile(sessionDir, questID string) (*TaskProgress, error) {
 	}
 
 	return &progress, nil
+}
+
+// Close - Clean up resources (stop timer, flush pending writes)
+// Call this when the StatusManager is no longer needed to prevent goroutine leaks
+func (m *StatusManager) Close() {
+	// Flush any pending writes first
+	m.Flush()
+	
+	// Stop the write timer to prevent goroutine leak
+	m.writeMu.Lock()
+	if m.writeTimer != nil {
+		m.writeTimer.Stop()
+		m.writeTimer = nil
+	}
+	m.writeScheduled = false
+	m.writeMu.Unlock()
 }
