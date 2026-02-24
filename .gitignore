@@ -1,0 +1,38 @@
+# Build artifacts
+/pal-broker
+/ws-test
+dist/
+*.exe
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.out
+
+# Session data
+/tmp/pal-broker/
+*.pid
+ws_port
+
+# Environment
+.env
+.env.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+
+# Markdown files (except AGENTS.md)
+*.md
+!AGENTS.md
