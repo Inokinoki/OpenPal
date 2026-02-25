@@ -1069,14 +1069,16 @@ func (s *WebSocketServer) startCLI(taskContent string) error {
 
 	// Initialize Claude session manager if using Claude provider
 	// This must be called before starting CLI to enable session resume
-	if s.cliAdapter.GetProvider() == "claude" {
+	if s.cliAdapter != nil && s.cliAdapter.GetProvider() == "claude" {
 		// Type assertion to access ClaudeAdapter-specific methods
 		type sessionInitializer interface {
 			SetSessionDir(sessionDir, taskID string)
 		}
-		if initializer, ok := s.cliAdapter.GetAdapter().(sessionInitializer); ok {
-			initializer.SetSessionDir(s.sessionDir, s.taskID)
-			util.DebugLog("[DEBUG] startCLI: initialized Claude session manager for task %s", s.taskID)
+		if adapter := s.cliAdapter.GetAdapter(); adapter != nil {
+			if initializer, ok := adapter.(sessionInitializer); ok {
+				initializer.SetSessionDir(s.sessionDir, s.taskID)
+				util.DebugLog("[DEBUG] startCLI: initialized Claude session manager for task %s", s.taskID)
+			}
 		}
 	}
 
@@ -1100,37 +1102,25 @@ func (s *WebSocketServer) startCLI(taskContent string) error {
 		}
 	}
 
-	// Start forwarding output (non-blocking)
-	go func() {
-		s.forwardStream(cli.Stdout, "chunk")
-	}()
+	// Start forwarding output (blocking for Claude -p mode, non-blocking for others)
+	if s.cliAdapter != nil && s.cliAdapter.GetProvider() == "claude" {
+		// Claude -p mode: wait for process to complete
+		s.ForwardOutput(cli.Stdout, cli.Stderr)
+		s.cli = nil // Clear CLI reference after completion
+	} else {
+		// Other modes: forward in background
+		go s.ForwardOutput(cli.Stdout, cli.Stderr)
+	}
 
 	return nil
 }
 
 // processInputQueue - Process input queue and send to CLI
-// Optimized: simplified control flow, reduced branching, better error propagation
-// Optimization 2026-02-24 03:23: removed verbose start/exit logs (noise reduction)
-// Optimization 2026-02-24 05:44: Removed redundant mode log (noise reduction)
+// For Claude (-p mode): starts a new process for each task, uses --resume for continuity
+// For ACP: maintains persistent connection
 func (s *WebSocketServer) processInputQueue() {
-
-	// Wait for first message
-	firstMsg, ok := <-s.inputQueue
-	if !ok {
-		util.DebugLog("[DEBUG] processInputQueue: queue closed before first message")
-		return
-	}
-
-	// Start CLI
-	util.DebugLog("[DEBUG] processInputQueue: starting CLI with %s: %s", firstMsg.Type, firstMsg.Content)
-	if err := s.startCLI(firstMsg.Content); err != nil {
-		s.errorCh <- err
-		s.cliStarted.Store(false)
-		return
-	}
-
-	// Cache mode check (avoid repeated calls)
-	isACP := s.cliAdapter.GetMode() == adapter.ModeACP
+	// Check if using Claude (needs -p mode with new process per task)
+	isClaude := s.cliAdapter != nil && s.cliAdapter.GetProvider() == "claude"
 
 	// Main message processing loop
 	for {
@@ -1143,21 +1133,34 @@ func (s *WebSocketServer) processInputQueue() {
 				return
 			}
 
-			if isACP {
-				// ACP mode: send via ACP protocol
-				if err := s.cliAdapter.SendACPPrompt(inputMsg.Content); err != nil && s.cliStarted.Load() {
+			if isClaude {
+				// Claude mode: start new process for each task
+				util.DebugLog("[DEBUG] processInputQueue: starting Claude with task: %s", inputMsg.Content)
+				if err := s.startCLI(inputMsg.Content); err != nil {
+					s.errorCh <- fmt.Errorf("start claude: %w", err)
+					continue
+				}
+				// Wait for Claude to complete (process will exit)
+				// Output is forwarded by ForwardOutput called in startCLI
+			} else if s.cliAdapter.GetMode() == adapter.ModeACP {
+				// ACP mode: send via ACP protocol (persistent connection)
+				if err := s.cliAdapter.SendACPPrompt(inputMsg.Content); err != nil {
 					s.errorCh <- fmt.Errorf("send input: %w", err)
 				}
 			} else {
-				// Text mode: verify CLI alive, then send
+				// Text mode with persistent CLI: send via stdin
 				s.mu.RLock()
 				cliAlive := s.cli != nil && s.cli.Stdin != nil
 				s.mu.RUnlock()
 
 				if !cliAlive {
-					return
+					// CLI not running, start it
+					if err := s.startCLI(inputMsg.Content); err != nil {
+						s.errorCh <- err
+					}
+				} else {
+					s.sendToCLI(inputMsg)
 				}
-				s.sendToCLI(inputMsg)
 			}
 		}
 	}

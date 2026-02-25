@@ -290,6 +290,8 @@ func (m *Manager) Start() (*CLIProcess, error) {
 	// Text mode
 	cmd := m.adapter.BuildCommand(m.config)
 	cmd.Dir = m.config.WorkDir
+	// Inherit environment variables (needed for API keys, etc.)
+	cmd.Env = os.Environ()
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -382,20 +384,22 @@ func (a *ClaudeAdapter) SupportsJSONStream() bool {
 var sessionIDRegex = regexp.MustCompile(`Session ID: ([a-f0-9-]+)`)
 
 func (a *ClaudeAdapter) ExtractSessionID(line string) string {
-	// Try regex match first
-	if matches := sessionIDRegex.FindStringSubmatch(line); len(matches) > 1 {
-		sessionID := matches[1]
-		util.DebugLog("[DEBUG] ClaudeAdapter: extracted session ID from output: %s", sessionID)
-		return sessionID
-	}
-
-	// Try JSON parsing
+	// Try JSON parsing first (most common for stream-json mode)
 	var msg map[string]interface{}
 	if err := json.Unmarshal([]byte(line), &msg); err == nil {
-		// Check for session_id in various locations
+		// Check for session_id at top level (system init message)
 		if sid, ok := msg["session_id"].(string); ok && sid != "" {
+			util.DebugLog("[DEBUG] ClaudeAdapter: extracted session_id from JSON: %s", sid)
 			return sid
 		}
+		// Check nested in message object
+		if message, ok := msg["message"].(map[string]interface{}); ok {
+			if sid, ok := message["session_id"].(string); ok && sid != "" {
+				util.DebugLog("[DEBUG] ClaudeAdapter: extracted session_id from message: %s", sid)
+				return sid
+			}
+		}
+		// Check in data object
 		if data, ok := msg["data"].(map[string]interface{}); ok {
 			if sid, ok := data["session_id"].(string); ok && sid != "" {
 				return sid
@@ -404,9 +408,17 @@ func (a *ClaudeAdapter) ExtractSessionID(line string) string {
 				return sid
 			}
 		}
+		// Check sessionId variant
 		if sid, ok := msg["sessionId"].(string); ok && sid != "" {
 			return sid
 		}
+	}
+
+	// Try regex match for text format
+	if matches := sessionIDRegex.FindStringSubmatch(line); len(matches) > 1 {
+		sessionID := matches[1]
+		util.DebugLog("[DEBUG] ClaudeAdapter: extracted session ID from regex: %s", sessionID)
+		return sessionID
 	}
 
 	return ""
@@ -435,11 +447,11 @@ func (a *ClaudeAdapter) UpdateSessionID(line string) {
 }
 
 func (a *ClaudeAdapter) BuildCommand(config *CLIConfig) *exec.Cmd {
+	// Use -p (print) mode for non-interactive execution
+	// This allows us to use --output-format stream-json
 	args := []string{
-		// Interactive mode (no -p flag)
-		// Allows continuous conversation via stdin/stdout
+		"-p",
 		"--output-format", "stream-json",
-		"--input-format", "stream-json",
 		"--verbose",
 	}
 
@@ -458,8 +470,10 @@ func (a *ClaudeAdapter) BuildCommand(config *CLIConfig) *exec.Cmd {
 		util.DebugLog("[DEBUG] ClaudeAdapter: resuming session %s", sessionID)
 	}
 
-	// Note: In interactive mode, task is sent via stdin
-	// Don't pass it as command line argument
+	// Task is passed as argument in -p mode
+	if config.Task != "" {
+		args = append(args, config.Task)
+	}
 
 	cliPath := a.GetCLIPath("claude")
 	return exec.Command(cliPath, args...)

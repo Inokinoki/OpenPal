@@ -30,6 +30,9 @@ type Manager struct {
 
 // NewManager - Create a new session manager for a task
 func NewManager(sessionDir, taskID, provider string) *Manager {
+	// Ensure session directory exists
+	_ = os.MkdirAll(filepath.Join(sessionDir, taskID), 0755)
+	
 	sessionFile := filepath.Join(sessionDir, taskID, fmt.Sprintf(".%s-session.json", provider))
 	
 	return &Manager{
@@ -95,6 +98,11 @@ func (m *Manager) Load() (string, error) {
 	data, err := m.loadWithoutLock()
 	if err != nil {
 		return "", err
+	}
+
+	// No session file yet
+	if data == nil {
+		return "", nil
 	}
 
 	// Cache for next time
