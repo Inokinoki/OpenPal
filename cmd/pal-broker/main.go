@@ -254,6 +254,8 @@ func autoDetectProvider(provider string) {
 			*supportsJSON = true // Claude supports JSON stream
 		case "codex":
 			*supportsJSON = true // Codex may support JSON
+		case "gemini":
+			*supportsJSON = true // Gemini supports JSON stream
 		}
 	}
 }
