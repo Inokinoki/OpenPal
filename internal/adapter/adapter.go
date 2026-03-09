@@ -47,10 +47,10 @@ func (c *CLIProcess) Stop() error {
 		util.DebugLog("[DEBUG] CLI Stop: interrupt failed: %v, forcing kill", err)
 		return c.forceKill()
 	}
-	
+
 	done := make(chan error, 1)
 	go func() { done <- c.Cmd.Wait() }()
-	
+
 	select {
 	case err := <-done:
 		return err
@@ -64,25 +64,25 @@ func (c *CLIProcess) forceKill() error {
 	if c.Cmd == nil || c.Cmd.Process == nil {
 		return nil
 	}
-	
+
 	if err := c.Cmd.Process.Kill(); err != nil {
 		return fmt.Errorf("force kill failed: %w", err)
 	}
-	
+
 	if c.Stdin != nil {
 		c.Stdin.Close()
 	}
-	
+
 	// Wait for process exit (500ms timeout)
 	done := make(chan error, 1)
 	go func() { done <- c.Cmd.Wait() }()
-	
+
 	select {
 	case <-done:
 	case <-time.After(500 * time.Millisecond):
 		// Process killed, reap timeout acceptable
 	}
-	
+
 	return nil
 }
 
@@ -98,14 +98,14 @@ type Adapter interface {
 
 // Manager - Adapter manager
 type Manager struct {
-	adapter        Adapter
-	acpClient      *ACPClient       // ACP client (if supported)
-	config         *CLIConfig
-	mode           AdapterMode      // ACP or Text mode
-	customCLIPath  string           // Custom CLI path
-	customCaps     []string         // Custom capabilities
-	forceACP       bool             // Force ACP mode
-	forceJSON      bool             // Force JSON stream mode
+	adapter       Adapter
+	acpClient     *ACPClient // ACP client (if supported)
+	config        *CLIConfig
+	mode          AdapterMode // ACP or Text mode
+	customCLIPath string      // Custom CLI path
+	customCaps    []string    // Custom capabilities
+	forceACP      bool        // Force ACP mode
+	forceJSON     bool        // Force JSON stream mode
 }
 
 // AdapterMode - Adapter mode
@@ -171,7 +171,7 @@ func NewAdapter(provider, workDir string) *Manager {
 			return &Manager{
 				acpClient: acpClient,
 				config:    config,
-				mode:      ModeACP,  // Mode is ACP, but process not started
+				mode:      ModeACP, // Mode is ACP, but process not started
 			}
 		}
 		// Fallback to text mode if ACP client creation fails
@@ -213,7 +213,7 @@ func (m *Manager) applyAdapterConfig(adapter Adapter) {
 		SetCLIPath(string)
 		SetCapabilities([]string)
 	}
-	
+
 	if cfg, ok := adapter.(configurable); ok {
 		cfg.SetCLIPath(m.customCLIPath)
 		cfg.SetCapabilities(m.customCaps)
@@ -223,7 +223,7 @@ func (m *Manager) applyAdapterConfig(adapter Adapter) {
 // SetCLIPath - Set custom CLI executable path
 func (m *Manager) SetCLIPath(path string) {
 	m.customCLIPath = path
-	
+
 	// Also update ACP client if using ACP mode
 	if m.acpClient != nil {
 		m.acpClient.customCLIPath = path
@@ -281,7 +281,7 @@ func (m *Manager) Start() (*CLIProcess, error) {
 		if err := m.acpClient.Start(); err != nil {
 			return nil, fmt.Errorf("ACP client start failed (provider=%s): %w", m.config.Provider, err)
 		}
-		
+
 		return &CLIProcess{
 			Cmd:    m.acpClient.cmd,
 			Stdin:  m.acpClient.stdin,
@@ -347,10 +347,10 @@ func (m *Manager) GetCapabilities() []string {
 // ClaudeAdapter - Claude Code adapter
 type ClaudeAdapter struct {
 	BaseAdapter
-	sessionDir     string              // Session directory for this task
-	sessionManager *session.Manager    // Session manager for persistence
-	sessionID      string              // Current session ID
-	sessionMu      sync.RWMutex        // Protects sessionID
+	sessionDir     string           // Session directory for this task
+	sessionManager *session.Manager // Session manager for persistence
+	sessionID      string           // Current session ID
+	sessionMu      sync.RWMutex     // Protects sessionID
 }
 
 func NewClaudeAdapter(config *CLIConfig) *ClaudeAdapter {
@@ -365,7 +365,7 @@ func NewClaudeAdapter(config *CLIConfig) *ClaudeAdapter {
 func (a *ClaudeAdapter) SetSessionDir(sessionDir, taskID string) {
 	a.sessionDir = sessionDir
 	a.sessionManager = session.NewManager(sessionDir, taskID, "claude")
-	
+
 	// Load existing session ID if available
 	if sessionID, err := a.sessionManager.Load(); err == nil && sessionID != "" {
 		a.sessionID = sessionID
@@ -490,7 +490,7 @@ func (a *ClaudeAdapter) ParseMessage(line string) (map[string]interface{}, error
 		// Non-JSON, treat as text
 		return parseTextOutputGeneric(line), nil
 	}
-	
+
 	// Handle null/empty JSON values
 	if msg == nil {
 		return map[string]interface{}{"type": "chunk", "content": line}, nil
@@ -628,16 +628,16 @@ func parseTextOutputGeneric(line string) map[string]interface{} {
 // Performance: ~100-200ns per parse (dominated by JSON unmarshal)
 func parseJSONMessage(line []byte) (map[string]interface{}, error) {
 	msg := make(map[string]interface{}, 8)
-	
+
 	if err := json.Unmarshal(line, &msg); err != nil {
 		return nil, err
 	}
-	
+
 	// Fast path: most messages already have type field
 	if msg["type"] == nil {
 		msg["type"] = "chunk"
 	}
-	
+
 	return msg, nil
 }
 
@@ -705,14 +705,14 @@ var (
 // CodexAdapter - Codex CLI adapter
 type CodexAdapter struct {
 	BaseAdapter
-	threadID        string // Saved session ID
-	sessionDir      string // Session directory
-	sessionFile     string // Path to session state file
-	sessionExists   atomic.Bool // Cached session file existence (atomic for lock-free reads)
-	sessionChecked  atomic.Bool // Whether cache is valid (atomic for lock-free reads)
-	lastTaskHash    uint64 // Hash of last task for deduplication
-	lastTaskHashMu  sync.Mutex // Protects lastTaskHash access
-	sessionMu       sync.Mutex // Protects session file check (write path only)
+	threadID       string      // Saved session ID
+	sessionDir     string      // Session directory
+	sessionFile    string      // Path to session state file
+	sessionExists  atomic.Bool // Cached session file existence (atomic for lock-free reads)
+	sessionChecked atomic.Bool // Whether cache is valid (atomic for lock-free reads)
+	lastTaskHash   uint64      // Hash of last task for deduplication
+	lastTaskHashMu sync.Mutex  // Protects lastTaskHash access
+	sessionMu      sync.Mutex  // Protects session file check (write path only)
 }
 
 func NewCodexAdapter(config *CLIConfig) *CodexAdapter {
@@ -739,13 +739,13 @@ func (a *CodexAdapter) SupportsJSONStream() bool {
 		// Check if codex exec supports --json (with timeout to avoid hanging)
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		
+
 		cmd := exec.CommandContext(ctx, "codex", "exec", "--help")
 		output, _ := cmd.CombinedOutput()
 		codexSupportsJSONCache = strings.Contains(string(output), "--json")
 		util.DebugLog("[DEBUG] CodexAdapter: JSON support check result: %v", codexSupportsJSONCache)
 	})
-	
+
 	return codexSupportsJSONCache
 }
 
@@ -759,7 +759,7 @@ func (a *CodexAdapter) BuildCommand(config *CLIConfig) *exec.Cmd {
 
 	// Determine if we should resume session or start fresh
 	shouldResume := false
-	
+
 	// Check for thread ID (in-memory session)
 	if a.threadID != "" {
 		shouldResume = true
@@ -767,7 +767,7 @@ func (a *CodexAdapter) BuildCommand(config *CLIConfig) *exec.Cmd {
 		// Check for persistent session file
 		shouldResume = true
 	}
-	
+
 	if shouldResume {
 		args = append(args, "resume", "--last")
 		// Don't add task when resuming - session continues from checkpoint
@@ -792,31 +792,31 @@ func (a *CodexAdapter) sessionFileExists() bool {
 	if a.sessionFile == "" {
 		return false
 	}
-	
+
 	// Fast path: atomic load for cached check (lock-free, ~1-2ns)
 	if a.sessionChecked.Load() {
 		return a.sessionExists.Load()
 	}
-	
+
 	// Slow path: acquire mutex and check filesystem
 	a.sessionMu.Lock()
 	defer a.sessionMu.Unlock()
-	
+
 	// Double-check after acquiring lock (another goroutine may have populated cache)
 	if a.sessionChecked.Load() {
 		return a.sessionExists.Load()
 	}
-	
+
 	// Check filesystem (single syscall)
 	exists := true
 	if _, err := os.Stat(a.sessionFile); err != nil {
 		exists = false
 	}
-	
+
 	// Store results atomically (order matters: exists first, then checked)
 	a.sessionExists.Store(exists)
 	a.sessionChecked.Store(true)
-	
+
 	if exists {
 		util.DebugLog("[DEBUG] CodexAdapter: found existing session file: %s", a.sessionFile)
 	}
@@ -839,10 +839,10 @@ func (a *CodexAdapter) shouldSkipTask(task string) bool {
 		return false
 	}
 	hash := simpleHash(task)
-	
+
 	a.lastTaskHashMu.Lock()
 	defer a.lastTaskHashMu.Unlock()
-	
+
 	if hash == a.lastTaskHash {
 		return true
 	}

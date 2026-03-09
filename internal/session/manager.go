@@ -20,9 +20,9 @@ type SessionData struct {
 
 // Manager - Session manager for a specific task
 type Manager struct {
-	sessionDir string // /tmp/pal-broker/{taskID}/
-	provider   string // claude, copilot, codex, etc.
-	taskID     string
+	sessionDir  string // /tmp/pal-broker/{taskID}/
+	provider    string // claude, copilot, codex, etc.
+	taskID      string
 	sessionFile string // Full path to session file
 	mu          sync.RWMutex
 	cachedID    string // Cached session ID for fast access
@@ -32,9 +32,9 @@ type Manager struct {
 func NewManager(sessionDir, taskID, provider string) *Manager {
 	// Ensure session directory exists
 	_ = os.MkdirAll(filepath.Join(sessionDir, taskID), 0755)
-	
+
 	sessionFile := filepath.Join(sessionDir, taskID, fmt.Sprintf(".%s-session.json", provider))
-	
+
 	return &Manager{
 		sessionDir:  sessionDir,
 		taskID:      taskID,

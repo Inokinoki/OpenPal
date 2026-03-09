@@ -70,18 +70,18 @@ type ACPContent struct {
 
 // ACPClient ACP client
 type ACPClient struct {
-	provider           string
-	cmd                *exec.Cmd
-	cmdName            string // Command name for better error messages
-	stdin              io.WriteCloser
-	stdout             io.ReadCloser
-	reader             *bufio.Reader // Reusable buffered reader for stdout
-	sessionID          string
-	seq                int64
-	mu                 sync.Mutex
-	started            bool // Track if client has been started
+	provider            string
+	cmd                 *exec.Cmd
+	cmdName             string // Command name for better error messages
+	stdin               io.WriteCloser
+	stdout              io.ReadCloser
+	reader              *bufio.Reader // Reusable buffered reader for stdout
+	sessionID           string
+	seq                 int64
+	mu                  sync.Mutex
+	started             bool              // Track if client has been started
 	notificationHandler func(*ACPMessage) // Per-instance notification handler
-	customCLIPath      string // Custom CLI path (optional)
+	customCLIPath       string            // Custom CLI path (optional)
 }
 
 // NewACPClient Create ACP client
@@ -118,10 +118,10 @@ func NewACPClient(provider, customCLIPath string) (*ACPClient, error) {
 	return &ACPClient{
 		provider:      provider,
 		cmd:           cmd,
-		cmdName:       cmdName,  // Store command name for better error messages
+		cmdName:       cmdName, // Store command name for better error messages
 		customCLIPath: customCLIPath,
-		stdin:         nil,      // Will be set in Start()
-		stdout:        nil,      // Will be set in Start()
+		stdin:         nil, // Will be set in Start()
+		stdout:        nil, // Will be set in Start()
 		seq:           0,
 	}, nil
 }
@@ -130,18 +130,18 @@ func NewACPClient(provider, customCLIPath string) (*ACPClient, error) {
 func (c *ACPClient) Start() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	
+
 	// Prevent double-start
 	if c.started {
 		util.DebugLog("[DEBUG] ACP client already started, skipping")
 		return nil
 	}
-	
+
 	// Validate command before starting
 	if c.cmd == nil {
 		return fmt.Errorf("ACP client command not initialized (provider=%s): check provider configuration", c.provider)
 	}
-	
+
 	// Start the process if not already started
 	if c.stdin == nil || c.stdout == nil {
 		var err error
@@ -175,7 +175,7 @@ func (c *ACPClient) Start() error {
 	// Send initialize request and read response
 	initializeResult := make(map[string]interface{})
 	err := c.sendRequest("initialize", map[string]interface{}{
-		"protocolVersion":    1,  // ACP protocol version (must be <= 65535)
+		"protocolVersion":    1, // ACP protocol version (must be <= 65535)
 		"clientCapabilities": map[string]interface{}{},
 	}, &initializeResult)
 
@@ -242,18 +242,18 @@ func (c *ACPClient) Listen(ctx context.Context, handler func(*ACPMessage)) error
 	if reader == nil {
 		return fmt.Errorf("ACP reader not initialized")
 	}
-	
+
 	// Get line buffer from pool (reduces allocations)
 	lineBufPtr := acpLineBufPool.Get().(*[]byte)
 	defer acpLineBufPool.Put(lineBufPtr)
-	
+
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
 		}
-		
+
 		// Read line using shared reader (avoids conflict with sendRequest)
 		*lineBufPtr = (*lineBufPtr)[:0] // Reset buffer
 		line, err := reader.ReadBytes('\n')
@@ -263,7 +263,7 @@ func (c *ACPClient) Listen(ctx context.Context, handler func(*ACPMessage)) error
 			}
 			return err
 		}
-		
+
 		if len(line) == 0 {
 			continue
 		}
@@ -329,7 +329,7 @@ func (c *ACPClient) sendRequest(method string, params interface{}, result interf
 	c.mu.Lock()
 	c.seq++
 	id := c.seq
-	
+
 	// Pre-cache reader and handler before releasing lock (avoids repeated field access in loop)
 	reader := c.reader
 	handler := c.notificationHandler
@@ -350,7 +350,7 @@ func (c *ACPClient) sendRequest(method string, params interface{}, result interf
 	acpIDPool.Put(idPtr)
 	clear(msg)
 	acpRequestPool.Put(msg)
-	
+
 	if err != nil {
 		return fmt.Errorf("ACP marshal error (method=%s): %w", method, err)
 	}
@@ -367,23 +367,23 @@ func (c *ACPClient) sendRequest(method string, params interface{}, result interf
 	if reader == nil {
 		return fmt.Errorf("ACP reader not initialized")
 	}
-	
+
 	lineBufPtr := acpLineBufPool.Get().(*[]byte)
 	defer acpLineBufPool.Put(lineBufPtr)
-	
+
 	response := acpResponsePool.Get().(map[string]interface{})
 	defer func() { clear(response); acpResponsePool.Put(response) }()
-	
+
 	ctx, cancel := context.WithTimeout(context.Background(), sendRequestTimeout)
 	defer cancel()
-	
+
 	for readCount := 0; readCount < maxReadAttempts; readCount++ {
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("ACP timeout (method=%s): %w", method, ctx.Err())
 		default:
 		}
-		
+
 		*lineBufPtr = (*lineBufPtr)[:0]
 		line, err := reader.ReadBytes('\n')
 		if err != nil {
@@ -395,16 +395,16 @@ func (c *ACPClient) sendRequest(method string, params interface{}, result interf
 			}
 			return fmt.Errorf("ACP read error (method=%s): %w", method, err)
 		}
-		
+
 		if len(line) == 0 {
 			continue
 		}
-		
+
 		clear(response)
 		if err := json.Unmarshal(line, &response); err != nil {
 			return fmt.Errorf("ACP parse error (method=%s)", method)
 		}
-		
+
 		// Handle notification (no id field) - optimized fast path
 		// Further optimized 2026-02-24: Avoid JSON marshal for notification params when possible
 		idVal, hasID := response["id"]
@@ -456,10 +456,10 @@ func (c *ACPClient) sendRequest(method string, params interface{}, result interf
 				return fmt.Errorf("ACP result unmarshal error (method=%s): %w", method, err)
 			}
 		}
-		
+
 		return nil
 	}
-	
+
 	return fmt.Errorf("ACP timeout (method=%s): no response after %d reads", method, maxReadAttempts)
 }
 

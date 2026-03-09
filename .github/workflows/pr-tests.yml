@@ -88,7 +88,16 @@ jobs:
       - name: Check code formatting
         run: |
           echo "Checking code formatting..."
-          unformatted=$(gofmt -l .)
+          # Use Go 1.24's gofmt to ensure generics support
+          GOROOT=$(go env GOROOT)
+          GOFMT="$GOROOT/bin/gofmt"
+          echo "Using gofmt from: $GOFMT"
+
+          # Verify gofmt supports generics
+          echo 'package main; func Test[T any](t T) {}' | "$GOFMT" > /dev/null && echo "✅ gofmt supports generics" || { echo "❌ gofmt doesn't support generics"; exit 1; }
+
+          # Check formatting
+          unformatted=$("$GOFMT" -l .)
           if [ -n "$unformatted" ]; then
             echo "Code is not formatted. Run 'go fmt ./...'"
             echo "Unformatted files:"

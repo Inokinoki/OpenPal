@@ -12,30 +12,30 @@ import (
 
 // AgentStatus - Current status of the AI agent
 type AgentStatus struct {
-	State       string            `json:"state"`        // running, completed, failed, stopped
-	Provider    string            `json:"provider"`     // claude, codex, copilot
-	QuestID     string            `json:"quest_id"`     // Quest identifier
-	PID         int               `json:"pid"`          // pal-broker PID
-	CLIPID      int               `json:"cli_pid"`      // AI CLI PID
-	StartTime   int64             `json:"start_time"`   // Unix timestamp (ms)
-	UpdateTime  int64             `json:"update_time"`  // Last update time (ms)
-	Seq         int64             `json:"seq"`          // Current sequence number
-	Capabilities []string         `json:"capabilities"` // Agent capabilities
-	WorkDir     string            `json:"work_dir"`     // Working directory
-	WebSocketPort int             `json:"ws_port"`      // WebSocket port
+	State         string   `json:"state"`        // running, completed, failed, stopped
+	Provider      string   `json:"provider"`     // claude, codex, copilot
+	QuestID       string   `json:"quest_id"`     // Quest identifier
+	PID           int      `json:"pid"`          // pal-broker PID
+	CLIPID        int      `json:"cli_pid"`      // AI CLI PID
+	StartTime     int64    `json:"start_time"`   // Unix timestamp (ms)
+	UpdateTime    int64    `json:"update_time"`  // Last update time (ms)
+	Seq           int64    `json:"seq"`          // Current sequence number
+	Capabilities  []string `json:"capabilities"` // Agent capabilities
+	WorkDir       string   `json:"work_dir"`     // Working directory
+	WebSocketPort int      `json:"ws_port"`      // WebSocket port
 }
 
 // TaskProgress - Current task progress
 type TaskProgress struct {
-	QuestID       string    `json:"quest_id"`
-	State         string    `json:"state"`         // pending, running, completed, failed
-	Progress      int       `json:"progress"`      // 0-100
-	CurrentAction string    `json:"current_action"` // Current action description
-	FilesModified []string  `json:"files_modified"` // List of modified files
-	LastOutput    string    `json:"last_output"`    // Last output line
+	QuestID        string   `json:"quest_id"`
+	State          string   `json:"state"`          // pending, running, completed, failed
+	Progress       int      `json:"progress"`       // 0-100
+	CurrentAction  string   `json:"current_action"` // Current action description
+	FilesModified  []string `json:"files_modified"` // List of modified files
+	LastOutput     string   `json:"last_output"`    // Last output line
 	LastOutputTime int64    `json:"last_output_time"`
-	StartTime     int64     `json:"start_time"`
-	UpdateTime    int64     `json:"update_time"`
+	StartTime      int64    `json:"start_time"`
+	UpdateTime     int64    `json:"update_time"`
 }
 
 // StatusManager - Manages status files
@@ -45,11 +45,11 @@ type StatusManager struct {
 	status        *AgentStatus
 	progress      *TaskProgress
 	filesModified map[string]struct{} // Map for O(1) duplicate check
-	
+
 	// Write buffering for high-frequency updates
-	pendingWrites int32 // atomic flag for pending writes
-	writeTimer    *time.Timer
-	writeMu       sync.Mutex
+	pendingWrites  int32 // atomic flag for pending writes
+	writeTimer     *time.Timer
+	writeMu        sync.Mutex
 	writeScheduled bool
 }
 
@@ -127,7 +127,7 @@ func (m *StatusManager) UpdateProgress(progress int, action string) {
 // AddFileModified - Record a modified file (uses delayed write for batching)
 func (m *StatusManager) AddFileModified(filePath string) {
 	m.mu.Lock()
-	
+
 	// O(1) duplicate check using map
 	if _, exists := m.filesModified[filePath]; exists {
 		m.mu.Unlock()
@@ -231,7 +231,7 @@ func (m *StatusManager) saveJSON(filename string, data interface{}) error {
 	default:
 		return fmt.Errorf("unsupported data type")
 	}
-	
+
 	if questID == "" {
 		return nil
 	}
@@ -260,21 +260,21 @@ func (m *StatusManager) scheduleWrite() {
 	if atomic.LoadInt32(&m.pendingWrites) == 1 {
 		return
 	}
-	
+
 	// Try to claim the write slot
 	if !atomic.CompareAndSwapInt32(&m.pendingWrites, 0, 1) {
 		return // Another goroutine claimed it
 	}
-	
+
 	m.writeMu.Lock()
-	
+
 	// Safety check: don't schedule if already closed
 	if m.writeTimer == nil {
 		atomic.StoreInt32(&m.pendingWrites, 0)
 		m.writeMu.Unlock()
 		return
 	}
-	
+
 	// Reset and start timer (inline timer reset to avoid extra goroutine)
 	if !m.writeTimer.Stop() {
 		select {
@@ -284,7 +284,7 @@ func (m *StatusManager) scheduleWrite() {
 	}
 	m.writeTimer.Reset(writeDelay)
 	m.writeScheduled = true
-	
+
 	m.writeMu.Unlock()
 	// Timer will fire and call flushWrites directly - no extra goroutine needed
 }
@@ -293,11 +293,11 @@ func (m *StatusManager) scheduleWrite() {
 func (m *StatusManager) flushWrites() {
 	m.writeMu.Lock()
 	defer m.writeMu.Unlock()
-	
+
 	// Save both status and progress together
 	m.saveStatusLocked()
 	m.saveProgressLocked()
-	
+
 	atomic.StoreInt32(&m.pendingWrites, 0)
 	m.writeScheduled = false
 }
@@ -366,7 +366,7 @@ func ReadProgressFromFile(sessionDir, questID string) (*TaskProgress, error) {
 func (m *StatusManager) Close() {
 	// Flush any pending writes first
 	m.Flush()
-	
+
 	// Stop the write timer to prevent goroutine leak
 	m.writeMu.Lock()
 	if m.writeTimer != nil {
