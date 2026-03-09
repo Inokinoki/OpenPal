@@ -41,6 +41,74 @@ jobs:
           path: pal-broker
           retention-days: 7
 
+  # Cross-platform tests
+  test-macos:
+    name: Test (macOS)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Run tests
+        run: |
+          echo "Running tests on macOS..."
+          go test -v ./internal/...
+          go test -v ./cmd/...
+
+      - name: Build binary
+        run: |
+          echo "Building for macOS..."
+          go build -o pal-broker-macos ./cmd/pal-broker
+          ./pal-broker-macos --version
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pal-broker-macos-amd64
+          path: pal-broker-macos
+          retention-days: 7
+
+  test-windows:
+    name: Test (Windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Run tests
+        run: |
+          Write-Host "Running tests on Windows..."
+          go test -v ./internal/...
+          go test -v ./cmd/...
+
+      - name: Build binary
+        run: |
+          Write-Host "Building for Windows..."
+          go build -o pal-broker-windows.exe ./cmd/pal-broker
+          ./pal-broker-windows.exe --version
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pal-broker-windows-amd64
+          path: pal-broker-windows.exe
+          retention-days: 7
+
   # 多平台构建（使用 Makefile）
   cross-platform-build:
     name: Cross-Platform Build
@@ -170,7 +238,7 @@ jobs:
   summary:
     name: CI Summary
     runs-on: ubuntu-latest
-    needs: [ci-pipeline, cross-platform-build, code-quality, integration-tests]
+    needs: [ci-pipeline, cross-platform-build, code-quality, integration-tests, test-macos, test-windows]
     if: always()
     steps:
       - name: Generate summary
@@ -186,7 +254,15 @@ jobs:
           echo "| Code Quality | ${{ needs.code-quality.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Integration Tests | ${{ needs.integration-tests.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
+          echo "### 🌍 Cross-Platform Tests" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Platform | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Linux 🐧 | ${{ needs.ci-pipeline.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| macOS 🍎 | ${{ needs.test-macos.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Windows 🪟 | ${{ needs.test-windows.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
           if [ "${{ needs.ci-pipeline.result }}" == "success" ] && \
              [ "${{ needs.cross-platform-build.result }}" == "success" ]; then
             echo "✅ All critical checks passed!" >> $GITHUB_STEP_SUMMARY

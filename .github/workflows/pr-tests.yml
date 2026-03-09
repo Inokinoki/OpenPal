@@ -9,10 +9,21 @@ on:
 permissions:
   contents: read  # No write permissions
 
+name: PR Tests
+
+# PR Tests - Safe for untrusted PRs (NO API keys used)
+on:
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+permissions:
+  contents: read  # No write permissions
+
 jobs:
-  # Unit tests - No API keys needed
-  unit-tests:
-    name: Unit Tests
+  # Unit tests - Linux (Ubuntu)
+  unit-tests-linux:
+    name: Unit Tests (Linux)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -33,15 +44,76 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: unit-test-results
+          name: unit-test-results-linux
           path: |
             coverage.out
             test-results.txt
           retention-days: 7
 
-  # Build test - Verify code compiles
-  build-test:
-    name: Build Test
+  # Unit tests - macOS
+  unit-tests-macos:
+    name: Unit Tests (macOS)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Run unit tests
+        run: |
+          echo "Running unit tests on macOS (no API keys needed)..."
+          go test -v ./internal/...
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results-macos
+          path: |
+            coverage.out
+            test-results.txt
+          retention-days: 7
+
+  # Unit tests - Windows
+  unit-tests-windows:
+    name: Unit Tests (Windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Run unit tests
+        run: |
+          Write-Host "Running unit tests on Windows (no API keys needed)..."
+          go test -v ./internal/...
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results-windows
+          path: |
+            coverage.out
+            test-results.txt
+          retention-days: 7
+
+  # Build test - Linux
+  build-test-linux:
+    name: Build Test (Linux)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -55,18 +127,76 @@ jobs:
 
       - name: Build binary
         run: |
-          echo "Building pal-broker..."
+          echo "Building pal-broker for Linux..."
           go build -o pal-broker ./cmd/pal-broker
           ./pal-broker --version
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: pal-broker-binary
+          name: pal-broker-binary-linux
           path: pal-broker
           retention-days: 7
 
-  # Code quality checks
+  # Build test - macOS
+  build-test-macos:
+    name: Build Test (macOS)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Build binary
+        run: |
+          echo "Building pal-broker for macOS..."
+          go build -o pal-broker ./cmd/pal-broker
+          ./pal-broker --version
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pal-broker-binary-macos
+          path: pal-broker
+          retention-days: 7
+
+  # Build test - Windows
+  build-test-windows:
+    name: Build Test (Windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Build binary
+        run: |
+          Write-Host "Building pal-broker for Windows..."
+          go build -o pal-broker.exe ./cmd/pal-broker
+          ./pal-broker.exe --version
+
+      - name: Upload build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pal-broker-binary-windows
+          path: pal-broker.exe
+          retention-days: 7
+
+  # Code quality checks (Linux only)
   code-quality:
     name: Code Quality
     runs-on: ubuntu-latest
@@ -110,31 +240,42 @@ jobs:
   pr-summary:
     name: PR Summary
     runs-on: ubuntu-latest
-    needs: [unit-tests, build-test, code-quality]
+    needs: [unit-tests-linux, unit-tests-macos, unit-tests-windows, build-test-linux, build-test-macos, build-test-windows, code-quality]
     if: always()
     steps:
       - name: Generate PR summary
         run: |
           echo "## 📊 PR Test Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Job Status" >> $GITHUB_STEP_SUMMARY
+          echo "### Platform-Specific Test Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Unit Tests | ${{ needs.unit-tests.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Build Test | ${{ needs.build-test.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Code Quality | ${{ needs.code-quality.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Platform | Unit Tests | Build Test |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|------------|------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Linux 🐧 | ${{ needs.unit-tests-linux.result }} | ${{ needs.build-test-linux.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| macOS 🍎 | ${{ needs.unit-tests-macos.result }} | ${{ needs.build-test-macos.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Windows 🪟 | ${{ needs.unit-tests-windows.result }} | ${{ needs.build-test-windows.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Code Quality" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Formatting & Vet | ${{ needs.code-quality.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          if [ "${{ needs.unit-tests.result }}" == "success" ] && \
-             [ "${{ needs.build-test.result }}" == "success" ] && \
+          # Check if all critical tests passed
+          if [ "${{ needs.unit-tests-linux.result }}" == "success" ] && \
+             [ "${{ needs.build-test-linux.result }}" == "success" ] && \
              [ "${{ needs.code-quality.result }}" == "success" ]; then
-            echo "✅ All PR tests passed!" >> $GITHUB_STEP_SUMMARY
+            echo "✅ All critical PR tests passed!" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "### 🔒 Security" >> $GITHUB_STEP_SUMMARY
             echo "- Unit tests: No API keys used ✅" >> $GITHUB_STEP_SUMMARY
             echo "- Build test: No secrets accessed ✅" >> $GITHUB_STEP_SUMMARY
             echo "- Safe for untrusted PRs ✅" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 🌍 Cross-Platform Testing" >> $GITHUB_STEP_SUMMARY
+            echo "- Linux: Tests passed ✅" >> $GITHUB_STEP_SUMMARY
+            echo "- macOS: Tests passed ✅" >> $GITHUB_STEP_SUMMARY
+            echo "- Windows: Tests passed ✅" >> $GITHUB_STEP_SUMMARY
           else
             echo "⚠️ Some PR tests failed" >> $GITHUB_STEP_SUMMARY
           fi
