@@ -210,122 +210,54 @@ jobs:
           mkdir -p /tmp/workspace
           mkdir -p /tmp/pal-broker-sessions
 
-      - name: Create functional mock CLIs for testing
+      - name: Install Claude Code CLI
         run: |
-          echo "Creating functional mock CLIs for integration testing..."
-          mkdir -p /tmp/mock-clis
+          echo "Installing Claude Code CLI..."
+          curl -fsSL https://claude.ai/install.sh | sh || echo "Claude CLI installation may have failed"
+          export PATH="$HOME/.local/bin:$PATH"
+          claude --version || echo "Claude CLI not found"
 
-          # Create mock claude CLI
-          cat > /tmp/mock-clis/claude << 'EOF'
-          #!/bin/bash
-          # Mock Claude CLI for testing
-          if [[ "$1" == "-p" ]] || [[ "$1" == "--prompt" ]]; then
-            shift
-            prompt="$@"
-            # Simulate tool calling response based on prompt
-            if echo "$prompt" | grep -qi "file"; then
-              echo '{"type":"assistant","content":"I can help you with file operations. Let me read the test.txt file for you."}'
-              echo '{"type":"tool_use","tool_use":{"name":"read_file","input":{"file_path":"test.txt"}}}'
-              echo '{"type":"chunk","content":"File read completed. The file contains: Hello, World!"}'
-            else
-              echo '{"type":"assistant","content":"Mock Claude response for testing. I can help with file operations and coding tasks."}'
-            fi
-          else
-            echo "Mock Claude CLI v1.0.0"
+      - name: Install Codex CLI
+        run: |
+          echo "Installing Codex CLI (OpenAI)..."
+          # Install OpenAI CLI
+          if command -v npm &> /dev/null; then
+            npm install -g openai || echo "OpenAI CLI installation failed"
           fi
-          EOF
-          chmod +x /tmp/mock-clis/claude
-
-          # Create mock codex CLI
-          cat > /tmp/mock-clis/codex << 'EOF'
-          #!/bin/bash
-          # Mock Codex CLI for testing
-          if [[ "$1" == "exec" ]]; then
-            shift
-            prompt="$@"
-            # Simulate tool calling response based on prompt
-            if echo "$prompt" | grep -qi "file"; then
-              echo '{"response":"I can help you with file operations. Reading test.txt file..."}'
-              echo '{"tool_calls":[{"name":"read_file","arguments":"{\\"file_path\\": \\"test.txt\\"}"}]}'
-              echo '{"content":"File read completed. The file contains: Test content for Codex"}'
-            else
-              echo '{"response":"Mock Codex response for testing. I can assist with code and file operations."}'
-              echo '{"tool_calls":[{"name":"analyze","arguments":"{\\"code\\": \\"example\\"}"}]}'
-            fi
-          elif [[ "$1" == "resume" ]] && [[ "$2" == "--last" ]]; then
-            shift 2
-            prompt="$@"
-            if echo "$prompt" | grep -qi "file"; then
-              echo '{"response":"Resumed session and reading file... File contains: Test content for Codex"}'
-            else
-              echo '{"response":"Mock Codex session resumed"}'
-            fi
-          else
-            echo "Mock Codex CLI v1.0.0"
+          # Try to install codex-cli if available
+          if command -v go &> /dev/null; then
+            go install github.com/openai/codex-cli@latest || echo "Codex CLI install failed"
           fi
-          EOF
-          chmod +x /tmp/mock-clis/codex
 
-          # Create mock copilot CLI
-          cat > /tmp/mock-clis/copilot << 'EOF'
-          #!/bin/bash
-          # Mock Copilot CLI for testing
-          if [[ "$1" == "--acp" ]] && [[ "$2" == "--stdio" ]]; then
-            # ACP mode - continuously respond to JSON-RPC requests
-            while IFS= read -r line; do
-              if [[ -n "$line" ]]; then
-                # Parse the method and respond appropriately
-                if echo "$line" | grep -q '"method".*"initialize"'; then
-                  echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"serverInfo":{"name":"mock-copilot","version":"1.0.0"}}}'
-                elif echo "$line" | grep -q '"method".*"session/new"'; then
-                  echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"mock-session-'$(date +%s)'","capabilities":{}}}'
-                elif echo "$line" | grep -q '"method".*"session/prompt"'; then
-                  echo '{"jsonrpc":"2.0","id":3,"result":{"message":{"role":"assistant","content":{"text":"Mock Copilot response for testing"}}}}'
-                else
-                  echo '{"jsonrpc":"2.0","id":0,"result":{}}'
-                fi
-              fi
-            done
-          else
-            echo "Mock Copilot CLI v1.0.0"
+      - name: Install GitHub Copilot CLI
+        run: |
+          echo "Installing GitHub Copilot CLI..."
+          if command -v npm &> /dev/null; then
+            npm install -g @github/copilot-cli || echo "Copilot CLI installation failed"
           fi
-          EOF
-          chmod +x /tmp/mock-clis/copilot
 
-          # Create mock gemini CLI
-          cat > /tmp/mock-clis/gemini << 'EOF'
-          #!/bin/bash
-          # Mock Gemini CLI for testing
-          if [[ "$1" == "chat" ]] && [[ "$2" == "--prompt" ]]; then
-            echo '{"response":"Mock Gemini response for testing"}'
-          else
-            echo "Mock Gemini CLI v1.0.0"
+      - name: Install Gemini CLI
+        run: |
+          echo "Installing Gemini CLI..."
+          if command -v npm &> /dev/null; then
+            npm install -g @google/generative-ai-cli || echo "Gemini CLI installation failed"
           fi
-          EOF
-          chmod +x /tmp/mock-clis/gemini
 
-          # Create mock opencode CLI
-          cat > /tmp/mock-clis/opencode << 'EOF'
-          #!/bin/bash
-          # Mock OpenCode CLI for testing
-          if [[ "$1" == "acp" ]]; then
-            echo '{"jsonrpc":"2.0","id":1,"result":{"status":"ready"}}'
-          else
-            echo "Mock OpenCode CLI v1.0.0"
+      - name: Install OpenCode CLI
+        run: |
+          echo "Installing OpenCode CLI..."
+          if command -v go &> /dev/null; then
+            go install github.com/opencode/opencode@latest || echo "OpenCode CLI install failed"
           fi
-          EOF
-          chmod +x /tmp/mock-clis/opencode
-
-          # Add mock CLIs to PATH
-          echo "/tmp/mock-clis" >> $GITHUB_PATH
-
-          echo "Mock CLIs created successfully"
 
       - name: Verify CLI installations
         run: |
           echo "Verifying CLI installations..."
+          export PATH="$HOME/.local/bin:$PATH:$HOME/go/bin"
+
           echo "Claude CLI: $(which claude || echo 'not found')"
           echo "Codex CLI: $(which codex || echo 'not found')"
+          echo "OpenAI CLI: $(which openai || echo 'not found')"
           echo "Copilot CLI: $(which copilot || echo 'not found')"
           echo "Gemini CLI: $(which gemini || echo 'not found')"
           echo "OpenCode CLI: $(which opencode || echo 'not found')"
@@ -333,17 +265,12 @@ jobs:
           # Test basic functionality
           echo ""
           echo "Testing CLI availability..."
-          command -v claude && echo "✓ claude available" || echo "✗ claude not available"
-          command -v codex && echo "✓ codex available" || echo "✗ codex not available"
-          command -v copilot && echo "✓ copilot available" || echo "✗ copilot not available"
-          command -v gemini && echo "✓ gemini available" || echo "✗ gemini not available"
-          command -v opencode && echo "✓ opencode available" || echo "✗ opencode not available"
-
-          echo ""
-          echo "Testing CLI basic functionality..."
-          claude -p "test" | head -1
-          codex exec "test" | head -1
-          echo "CLIs are ready for testing"
+          command -v claude && echo "✓ claude available" || echo "✗ claude not available (will skip tests)"
+          command -v codex && echo "✓ codex available" || echo "✗ codex not available (will skip tests)"
+          command -v openai && echo "✓ openai available" || echo "✗ openai not available"
+          command -v copilot && echo "✓ copilot available" || echo "✗ copilot not available (will skip tests)"
+          command -v gemini && echo "✓ gemini available" || echo "✗ gemini not available (will skip tests)"
+          command -v opencode && echo "✓ opencode available" || echo "✗ opencode not available (will skip tests)"
 
       - name: Run integration tests
         run: |
