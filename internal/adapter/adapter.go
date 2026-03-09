@@ -186,6 +186,10 @@ func NewAdapter(provider, workDir string) *Manager {
 		adapter = NewCodexAdapter(config)
 	case "copilot", "copilot-acp":
 		adapter = NewCopilotAdapter(config)
+	case "gemini":
+		adapter = NewGeminiAdapter(config)
+	case "opencode":
+		adapter = NewOpenCodeAdapter(config)
 	default:
 		adapter = NewGenericAdapter(config)
 	}
@@ -919,6 +923,208 @@ func (a *CopilotAdapter) SendCommand(cmd string, params map[string]interface{}) 
 
 func (a *CopilotAdapter) GetCapabilities() []string {
 	return getCapabilities(a.caps, capsGeneric)
+}
+
+// GeminiAdapter - Gemini CLI adapter
+type GeminiAdapter struct {
+	BaseAdapter
+	sessionDir     string
+	sessionManager *session.Manager
+	sessionID      string
+	sessionMu      sync.RWMutex
+}
+
+func NewGeminiAdapter(config *CLIConfig) *GeminiAdapter {
+	return &GeminiAdapter{
+		BaseAdapter: BaseAdapter{
+			config: config,
+		},
+	}
+}
+
+// SetSessionDir - Set session directory for this adapter
+func (a *GeminiAdapter) SetSessionDir(sessionDir, taskID string) {
+	a.sessionDir = sessionDir
+	a.sessionManager = session.NewManager(sessionDir, taskID, "gemini")
+
+	if sessionID, err := a.sessionManager.Load(); err == nil && sessionID != "" {
+		a.sessionID = sessionID
+		util.DebugLog("[DEBUG] GeminiAdapter: loaded existing session: %s", sessionID)
+	}
+}
+
+func (a *GeminiAdapter) SupportsACP() bool {
+	return false
+}
+
+func (a *GeminiAdapter) SupportsJSONStream() bool {
+	return true
+}
+
+func (a *GeminiAdapter) BuildCommand(config *CLIConfig) *exec.Cmd {
+	args := []string{
+		"chat",
+		"--format", "json",
+		"--stream",
+	}
+
+	a.sessionMu.RLock()
+	sessionID := a.sessionID
+	a.sessionMu.RUnlock()
+
+	if sessionID != "" {
+		args = append(args, "--session", sessionID)
+		util.DebugLog("[DEBUG] GeminiAdapter: resuming session %s", sessionID)
+	}
+
+	if config.Task != "" {
+		args = append(args, "--prompt", config.Task)
+	}
+
+	cliPath := a.GetCLIPath("gemini")
+	return exec.Command(cliPath, args...)
+}
+
+func (a *GeminiAdapter) ParseMessage(line string) (map[string]interface{}, error) {
+	var msg map[string]interface{}
+	if err := json.Unmarshal([]byte(line), &msg); err != nil {
+		return parseTextOutputGeneric(line), nil
+	}
+
+	if msg == nil {
+		return map[string]interface{}{"type": "chunk", "content": line}, nil
+	}
+
+	msgType, _ := msg["type"].(string)
+	switch msgType {
+	case "chunk":
+		return msg, nil
+	case "response":
+		return map[string]interface{}{
+			"type":    "assistant",
+			"content": extractContent(msg),
+			"data":    msg,
+		}, nil
+	case "error":
+		return map[string]interface{}{
+			"type":    "error",
+			"content": msg["message"],
+			"data":    msg,
+		}, nil
+	default:
+		if _, ok := msg["content"]; !ok {
+			msg["content"] = ""
+		}
+		return msg, nil
+	}
+}
+
+func (a *GeminiAdapter) SendCommand(cmd string, params map[string]interface{}) error {
+	return a.buildAndSendCommand(cmd, params)
+}
+
+func (a *GeminiAdapter) GetCapabilities() []string {
+	return getCapabilities(a.caps, capsClaude)
+}
+
+// buildAndSendCommand - Build and send command to Gemini CLI
+func (a *GeminiAdapter) buildAndSendCommand(cmd string, params map[string]interface{}) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.stdin == nil {
+		return fmt.Errorf("stdin not available")
+	}
+
+	msg := map[string]interface{}{
+		"type":   "command",
+		"action": cmd,
+	}
+	if params != nil {
+		msg["params"] = util.CloneMap(params)
+	}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("marshal command failed: %w", err)
+	}
+
+	_, err = a.stdin.Write(append(data, '\n'))
+	return err
+}
+
+// OpenCodeAdapter - OpenCode CLI adapter (ACP mode)
+type OpenCodeAdapter struct {
+	BaseAdapter
+}
+
+func NewOpenCodeAdapter(config *CLIConfig) *OpenCodeAdapter {
+	return &OpenCodeAdapter{
+		BaseAdapter: BaseAdapter{
+			config: config,
+		},
+	}
+}
+
+func (a *OpenCodeAdapter) SupportsACP() bool {
+	return true
+}
+
+func (a *OpenCodeAdapter) SupportsJSONStream() bool {
+	return false
+}
+
+func (a *OpenCodeAdapter) BuildCommand(config *CLIConfig) *exec.Cmd {
+	cliPath := a.GetCLIPath("opencode")
+	return exec.Command(cliPath, "acp")
+}
+
+func (a *OpenCodeAdapter) ParseMessage(line string) (map[string]interface{}, error) {
+	var msg map[string]interface{}
+	if err := json.Unmarshal([]byte(line), &msg); err != nil {
+		return parseTextOutputGeneric(line), nil
+	}
+
+	if msg == nil {
+		return map[string]interface{}{"type": "chunk", "content": line}, nil
+	}
+
+	// Handle ACP protocol messages
+	if method, ok := msg["method"].(string); ok {
+		if method == "session/update" {
+			return map[string]interface{}{
+				"type":    "update",
+				"content": msg,
+				"data":    msg,
+			}, nil
+		}
+	}
+
+	if result, ok := msg["result"]; ok {
+		return map[string]interface{}{
+			"type":   "result",
+			"result": result,
+			"data":   msg,
+		}, nil
+	}
+
+	if errMsg, ok := msg["error"]; ok {
+		return map[string]interface{}{
+			"type":    "error",
+			"content": errMsg,
+			"data":    msg,
+		}, nil
+	}
+
+	return msg, nil
+}
+
+func (a *OpenCodeAdapter) SendCommand(cmd string, params map[string]interface{}) error {
+	return fmt.Errorf("OpenCode uses ACP protocol, use ACP client instead")
+}
+
+func (a *OpenCodeAdapter) GetCapabilities() []string {
+	return getCapabilities(a.caps, []string{"text_output", "multi_turn", "streaming", "tool_use"})
 }
 
 // GenericAdapter - Generic adapter (for unknown CLI)
