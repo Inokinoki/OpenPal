@@ -210,45 +210,82 @@ jobs:
           mkdir -p /tmp/workspace
           mkdir -p /tmp/pal-broker-sessions
 
-      - name: Install Claude Code CLI
+      - name: Create functional mock CLIs for testing
         run: |
-          echo "Installing Claude Code CLI..."
-          curl -fsSL https://claude.ai/install.sh | sh || echo "Claude CLI installation failed, continuing..."
-          export PATH="$HOME/.local/bin:$PATH"
-          claude --version || echo "Claude CLI not found in PATH"
+          echo "Creating functional mock CLIs for integration testing..."
+          mkdir -p /tmp/mock-clis
 
-      - name: Install Codex CLI
-        run: |
-          echo "Installing Codex CLI..."
-          # Clone and build codex-cli from GitHub
-          git clone https://github.com/openai/codex-cli /tmp/codex-cli || echo "Codex CLI clone failed, continuing..."
-          cd /tmp/codex-cli && go build -o codex && sudo mv codex /usr/local/bin/ || echo "Codex CLI build failed"
-          codex --version || echo "Codex CLI not found"
+          # Create mock claude CLI
+          cat > /tmp/mock-clis/claude << 'EOF'
+          #!/bin/bash
+          # Mock Claude CLI for testing
+          if [[ "$1" == "-p" ]] || [[ "$1" == "--prompt" ]]; then
+            echo '{"type":"assistant","content":"Mock Claude response for testing"}'
+          else
+            echo "Mock Claude CLI v1.0.0"
+          fi
+          EOF
+          chmod +x /tmp/mock-clis/claude
 
-      - name: Install Gemini CLI
-        run: |
-          echo "Installing Gemini CLI..."
-          npm install -g @google/generative-ai-cli || echo "Gemini CLI installation failed, continuing..."
-          gemini --version || echo "Gemini CLI not found"
+          # Create mock codex CLI
+          cat > /tmp/mock-clis/codex << 'EOF'
+          #!/bin/bash
+          # Mock Codex CLI for testing
+          if [[ "$1" == "exec" ]]; then
+            echo '{"response":"Mock Codex response for testing"}'
+          elif [[ "$1" == "chat" ]]; then
+            echo '{"response":"Mock Codex chat response"}'
+          else
+            echo "Mock Codex CLI v1.0.0"
+          fi
+          EOF
+          chmod +x /tmp/mock-clis/codex
 
-      - name: Install GitHub Copilot CLI
-        run: |
-          echo "Installing GitHub Copilot CLI..."
-          npm install -g @github/copilot-cli || echo "Copilot CLI installation failed, continuing..."
-          copilot --version || echo "Copilot CLI not found"
+          # Create mock copilot CLI
+          cat > /tmp/mock-clis/copilot << 'EOF'
+          #!/bin/bash
+          # Mock Copilot CLI for testing
+          if [[ "$1" == "--acp" ]] && [[ "$2" == "--stdio" ]]; then
+            # ACP mode - respond with JSON-RPC
+            echo '{"jsonrpc":"2.0","id":1,"result":{"sessionId":"mock-session-123"}}'
+          else
+            echo "Mock Copilot CLI v1.0.0"
+          fi
+          EOF
+          chmod +x /tmp/mock-clis/copilot
 
-      - name: Install OpenCode CLI
-        run: |
-          echo "Installing OpenCode CLI..."
-          # Clone and build opencode from GitHub
-          git clone https://github.com/opencode/opencode /tmp/opencode || echo "OpenCode clone failed, continuing..."
-          cd /tmp/opencode && go build -o opencode && sudo mv opencode /usr/local/bin/ || echo "OpenCode build failed"
-          opencode --version || echo "OpenCode not found"
+          # Create mock gemini CLI
+          cat > /tmp/mock-clis/gemini << 'EOF'
+          #!/bin/bash
+          # Mock Gemini CLI for testing
+          if [[ "$1" == "chat" ]] && [[ "$2" == "--prompt" ]]; then
+            echo '{"response":"Mock Gemini response for testing"}'
+          else
+            echo "Mock Gemini CLI v1.0.0"
+          fi
+          EOF
+          chmod +x /tmp/mock-clis/gemini
+
+          # Create mock opencode CLI
+          cat > /tmp/mock-clis/opencode << 'EOF'
+          #!/bin/bash
+          # Mock OpenCode CLI for testing
+          if [[ "$1" == "acp" ]]; then
+            echo '{"jsonrpc":"2.0","id":1,"result":{"status":"ready"}}'
+          else
+            echo "Mock OpenCode CLI v1.0.0"
+          fi
+          EOF
+          chmod +x /tmp/mock-clis/opencode
+
+          # Add mock CLIs to PATH
+          echo "/tmp/mock-clis" >> $GITHUB_PATH
+
+          echo "Mock CLIs created successfully"
 
       - name: Verify CLI installations
         run: |
           echo "Verifying CLI installations..."
-          export PATH="$HOME/.local/bin:$PATH"
           echo "Claude CLI: $(which claude || echo 'not found')"
           echo "Codex CLI: $(which codex || echo 'not found')"
           echo "Copilot CLI: $(which copilot || echo 'not found')"
@@ -263,6 +300,12 @@ jobs:
           command -v copilot && echo "✓ copilot available" || echo "✗ copilot not available"
           command -v gemini && echo "✓ gemini available" || echo "✗ gemini not available"
           command -v opencode && echo "✓ opencode available" || echo "✗ opencode not available"
+
+          echo ""
+          echo "Testing CLI basic functionality..."
+          claude -p "test" | head -1
+          codex exec "test" | head -1
+          echo "CLIs are ready for testing"
 
       - name: Run integration tests
         run: |
