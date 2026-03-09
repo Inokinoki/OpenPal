@@ -88,7 +88,14 @@ jobs:
       - name: Check code formatting
         run: |
           echo "Checking code formatting..."
-          test -z $(gofmt -l .) || (echo "Code is not formatted. Run 'go fmt ./...'"; exit 1)
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "Code is not formatted. Run 'go fmt ./...'"
+            echo "Unformatted files:"
+            echo "$unformatted"
+            exit 1
+          fi
+          echo "✅ Code is properly formatted"
 
   # PR summary
   pr-summary:
