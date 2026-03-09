@@ -143,7 +143,7 @@ jobs:
           echo "✅ Claude API key configured"
 
       - name: Test with Claude
-        needs: verify-claude
+        if: success()
         run: |
           echo "Testing Claude Code integration..."
           go test -tags=integration -run TestClaude -v ./tests/integration/...
@@ -159,7 +159,7 @@ jobs:
           echo "✅ Codex API key configured"
 
       - name: Test with Codex
-        needs: verify-codex
+        if: success()
         run: |
           echo "Testing Codex integration..."
           go test -tags=integration -run TestCodex -v ./tests/integration/...
@@ -182,7 +182,7 @@ jobs:
           echo "✅ Copilot API key configured"
 
       - name: Test with Copilot
-        needs: verify-copilot
+        if: success()
         run: |
           echo "Testing Copilot integration..."
           go test -tags=integration -run TestCopilot -v ./tests/integration/...
