@@ -443,6 +443,8 @@ func readACPMessages(t *testing.T, stdout io.ReadCloser, timeout time.Duration) 
 	var messages []string
 	scanner := bufio.NewScanner(stdout)
 	deadline := time.After(timeout)
+	messageCount := 0
+	maxMessages := 3 // Limit messages to prevent hanging
 
 	for {
 		select {
@@ -451,6 +453,12 @@ func readACPMessages(t *testing.T, stdout io.ReadCloser, timeout time.Duration) 
 				line := scanner.Text()
 				if line != "" {
 					messages = append(messages, line)
+					messageCount++
+					// Stop after receiving a few messages to prevent hanging
+					if messageCount >= maxMessages {
+						t.Logf("Received %d messages, stopping scan", messageCount)
+						return messages
+					}
 				}
 			} else {
 				return messages

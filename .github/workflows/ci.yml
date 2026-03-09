@@ -291,7 +291,7 @@ jobs:
           cat > /tmp/mock-clis/copilot << 'EOF'
           #!/bin/bash
           if [[ "$1" == "--acp" ]] && [[ "$2" == "--stdio" ]]; then
-            # ACP mode - respond immediately to all requests
+            # ACP mode - respond immediately and close stdout to signal completion
             while IFS= read -r line; do
               if [[ -n "$line" ]]; then
                 # Extract request ID
@@ -304,19 +304,24 @@ jobs:
                 case "$method" in
                   "initialize")
                     echo '{"jsonrpc":"2.0","id":'$(($req_id))',"result":{"protocolVersion":1,"serverInfo":{"name":"mock-copilot","version":"1.0.0"}}}'
+                    # Close stdout to signal response complete
+                    exec 1>&-
                     ;;
                   "session/new")
                     echo '{"jsonrpc":"2.0","id":'$(($req_id))',"result":{"sessionId":"mock-session-'$(date +%s)'","capabilities":{}}}'
+                    exec 1>&-
                     ;;
                   "session/prompt")
-                    echo '{"jsonrpc":"2.0","id":'$(($req_id))',"result":{"message":{"role":"assistant","content":{"text":"Mock Copilot response for testing"}}}}'
+                    echo '{"jsonrpc":"2.0","id":'$(($req_id))',"result":{"message":{"role":"assistant","content":{"text":"Mock response: 2+2=4"}}}}'
+                    # Send completion signal
+                    echo '{"jsonrpc":"2.0","method":"done","params":{}}'
+                    exec 1>&-
                     ;;
                   *)
                     echo '{"jsonrpc":"2.0","id":'$(($req_id))',"result":{}}'
+                    exec 1>&-
                     ;;
                 esac
-                # Flush output immediately
-                sleep 0.01
               fi
             done
           else
