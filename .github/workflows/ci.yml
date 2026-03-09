@@ -291,17 +291,32 @@ jobs:
           cat > /tmp/mock-clis/copilot << 'EOF'
           #!/bin/bash
           if [[ "$1" == "--acp" ]] && [[ "$2" == "--stdio" ]]; then
+            # ACP mode - respond immediately to all requests
             while IFS= read -r line; do
               if [[ -n "$line" ]]; then
-                if echo "$line" | grep -q '"method".*"initialize"'; then
-                  echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"serverInfo":{"name":"mock-copilot","version":"1.0.0"}}}'
-                elif echo "$line" | grep -q '"method".*"session/new"'; then
-                  echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"mock-session-'$(date +%s)'","capabilities":{}}}'
-                elif echo "$line" | grep -q '"method".*"session/prompt"'; then
-                  echo '{"jsonrpc":"2.0","id":3,"result":{"message":{"role":"assistant","content":{"text":"Mock Copilot response for testing with real API keys"}}}}'
-                else
-                  echo '{"jsonrpc":"2.0","id":0,"result":{}}'
-                fi
+                # Extract request ID
+                req_id=$(echo "$line" | grep -o '"id":[0-9]*' | cut -d: -f2)
+                [[ -z "$req_id" ]] && req_id=0
+
+                # Extract method
+                method=$(echo "$line" | grep -o '"method":"[^"]*"' | cut -d: -f2 | tr -d '"')
+
+                case "$method" in
+                  "initialize")
+                    echo '{"jsonrpc":"2.0","id":'$(($req_id))',"result":{"protocolVersion":1,"serverInfo":{"name":"mock-copilot","version":"1.0.0"}}}'
+                    ;;
+                  "session/new")
+                    echo '{"jsonrpc":"2.0","id":'$(($req_id))',"result":{"sessionId":"mock-session-'$(date +%s)'","capabilities":{}}}'
+                    ;;
+                  "session/prompt")
+                    echo '{"jsonrpc":"2.0","id":'$(($req_id))',"result":{"message":{"role":"assistant","content":{"text":"Mock Copilot response for testing"}}}}'
+                    ;;
+                  *)
+                    echo '{"jsonrpc":"2.0","id":'$(($req_id))',"result":{}}'
+                    ;;
+                esac
+                # Flush output immediately
+                sleep 0.01
               fi
             done
           else

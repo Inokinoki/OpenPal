@@ -277,7 +277,7 @@ func TestCopilot_ACP_3TurnConversation(t *testing.T) {
 	})
 
 	// Read initialize response
-	readACPResponse(t, stdout, 5*time.Second)
+	readACPResponse(t, stdout, 2*time.Second)
 
 	// Create session
 	sendACPRequest(t, stdin, 2, "session/new", map[string]interface{}{
@@ -285,7 +285,7 @@ func TestCopilot_ACP_3TurnConversation(t *testing.T) {
 		"mcpServers": []interface{}{},
 	})
 
-	sessionResp := readACPResponse(t, stdout, 5*time.Second)
+	sessionResp := readACPResponse(t, stdout, 2*time.Second)
 	t.Logf("Session response: %s", sessionResp)
 
 	// Turn 1: First prompt
@@ -296,7 +296,7 @@ func TestCopilot_ACP_3TurnConversation(t *testing.T) {
 		},
 	})
 
-	resp1 := readACPMessages(t, stdout, 10*time.Second)
+	resp1 := readACPMessages(t, stdout, 2*time.Second)
 	t.Logf("Turn 1 received %d messages", len(resp1))
 
 	// Turn 2: Follow-up prompt
@@ -307,7 +307,7 @@ func TestCopilot_ACP_3TurnConversation(t *testing.T) {
 		},
 	})
 
-	resp2 := readACPMessages(t, stdout, 10*time.Second)
+	resp2 := readACPMessages(t, stdout, 2*time.Second)
 	t.Logf("Turn 2 received %d messages", len(resp2))
 
 	// Turn 3: Another follow-up
@@ -318,7 +318,7 @@ func TestCopilot_ACP_3TurnConversation(t *testing.T) {
 		},
 	})
 
-	resp3 := readACPMessages(t, stdout, 10*time.Second)
+	resp3 := readACPMessages(t, stdout, 2*time.Second)
 	t.Logf("Turn 3 received %d messages", len(resp3))
 
 	// Verify we got responses
