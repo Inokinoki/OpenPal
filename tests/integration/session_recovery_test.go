@@ -19,7 +19,7 @@ import (
 func TestClaude_SessionRecovery(t *testing.T) {
 	skipIfNoCLI(t, "claude")
 
-	if !hasAPIKey(t, "ANTHROPIC_API_KEY", "CLAUDE_API_KEY") {
+	if !hasAPIKey(t, "ANTHROPIC_API_KEY", "CLAUDE_API_KEY", "ANTHROPIC_AUTH_TOKEN") {
 		t.Skip("Skipping: No Anthropic API key found")
 	}
 
@@ -74,7 +74,7 @@ func TestClaude_SessionRecovery(t *testing.T) {
 	t.Log("Session file created")
 
 	// Turn 2: Resume session and ask for the remembered number
-	cmd2 := exec.Command("claude", "-p", "--output-format", "stream-json",
+	cmd2 := exec.Command("claude", "-p", "--output-format", "stream-json", "--verbose",
 		"--resume", sessionID, "What number did I ask you to remember?")
 	cmd2.Dir = tmpDir
 	cmd2.Env = os.Environ()
@@ -95,7 +95,7 @@ func TestClaude_SessionRecovery(t *testing.T) {
 	}
 
 	// Turn 3: Another interaction in the same session
-	cmd3 := exec.Command("claude", "-p", "--output-format", "stream-json",
+	cmd3 := exec.Command("claude", "-p", "--output-format", "stream-json", "--verbose",
 		"--resume", sessionID, "Multiply that number by 2")
 	cmd3.Dir = tmpDir
 	cmd3.Env = os.Environ()
@@ -402,7 +402,37 @@ func TestAllProviders_SessionRecovery(t *testing.T) {
 func extractSessionIDFromOutput(output string) string {
 	// Try to extract session ID from various formats
 
-	// Format 1: "Session ID: xxx"
+	// Format 1: JSON format with session_id field (handle streaming JSON)
+	if strings.Contains(output, "session_id") {
+		// Try parsing each line as JSON (streaming format)
+		lines := strings.Split(output, "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" || !strings.HasPrefix(line, "{") {
+				continue
+			}
+
+			var data map[string]interface{}
+			if err := json.Unmarshal([]byte(line), &data); err == nil {
+				// Check for session_id at top level
+				if sessionID, ok := data["session_id"].(string); ok && sessionID != "" {
+					return sessionID
+				}
+				// Check in data object
+				if dataObj, ok := data["data"].(map[string]interface{}); ok {
+					if sessionID, ok := dataObj["session_id"].(string); ok && sessionID != "" {
+						return sessionID
+					}
+				}
+				// Check sessionId variant
+				if sessionID, ok := data["sessionId"].(string); ok && sessionID != "" {
+					return sessionID
+				}
+			}
+		}
+	}
+
+	// Format 2: "Session ID: xxx" text format
 	if strings.Contains(output, "Session ID:") {
 		parts := strings.Split(output, "Session ID:")
 		if len(parts) > 1 {
@@ -410,16 +440,6 @@ func extractSessionIDFromOutput(output string) string {
 			// Extract UUID-like format
 			if len(id) >= 36 {
 				return id[:36]
-			}
-		}
-	}
-
-	// Format 2: JSON format with session_id field
-	if strings.Contains(output, "session_id") {
-		var data map[string]interface{}
-		if err := json.Unmarshal([]byte(output), &data); err == nil {
-			if sessionID, ok := data["session_id"].(string); ok {
-				return sessionID
 			}
 		}
 	}

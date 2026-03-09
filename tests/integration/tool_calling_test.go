@@ -25,6 +25,7 @@ func hasAPIKey(t *testing.T, envVars ...string) bool {
 func TestClaude_ToolCalling(t *testing.T) {
 	skipIfNoCLI(t, "claude")
 
+	// Check multiple possible API key environment variables
 	if !hasAPIKey(t, "ANTHROPIC_API_KEY", "CLAUDE_API_KEY", "ANTHROPIC_AUTH_TOKEN") {
 		t.Skip("Skipping: No Anthropic API key found")
 	}
