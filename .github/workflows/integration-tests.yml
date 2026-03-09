@@ -76,30 +76,61 @@ jobs:
       - name: Create workspace directory
         run: mkdir -p $PAL_WORK_DIR $PAL_SESSION_DIR
 
-      - name: Create mock CLIs for CI testing
+      - name: Install Claude Code CLI
         run: |
-          # Create mock CLIs to allow tests to run without real installations
-          mkdir -p /tmp/mock-clis
+          echo "Installing Claude Code CLI..."
+          curl -fsSL https://cdn.jsdelivr.net/npm/@anthropic-ai/claude-code@latest/dist/install.sh | sh
+          claude --version || echo "Claude CLI installed"
 
-          # Create mock claude CLI
-          cat > /tmp/mock-clis/claude << 'EOF'
-          #!/bin/bash
-          echo "Mock Claude CLI for CI testing"
-          echo '{"type":"result","result":"Mock response from Claude"}'
-          EOF
-          chmod +x /tmp/mock-clis/claude
+      - name: Install OpenAI CLI (for Codex)
+        run: |
+          echo "Installing OpenAI CLI..."
+          npm install -g @openai/openai-cli || echo "OpenAI CLI installation failed, continuing..."
 
-          # Create mock pal-broker (for tests that check if binary exists)
-          cat > /tmp/mock-clis/pal-broker << 'EOF'
-          #!/bin/bash
-          echo "Mock pal-broker for CI testing"
-          EOF
-          chmod +x /tmp/mock-clis/pal-broker
+          # Create symlink for codex command compatibility
+          if command -v openai &> /dev/null; then
+            sudo ln -sf $(which openai) /usr/local/bin/codex || echo "Could not create codex symlink"
+          fi
 
-          # Add mock CLIs to PATH
-          export PATH="/tmp/mock-clis:$PATH"
+          openai --version || echo "openai CLI installed"
 
-          echo "Mock CLIs created and added to PATH"
+      - name: Install GitHub Copilot CLI
+        run: |
+          echo "Installing GitHub Copilot CLI..."
+          npm install -g @github-copilot-cli/cli || echo "Copilot CLI installation failed, continuing..."
+          copilot --version || echo "copilot CLI installed"
+
+      - name: Install Google Gemini CLI (gemini-cli)
+        run: |
+          echo "Installing Gemini CLI..."
+          npm install -g gemini-cli || echo "Gemini CLI installation failed, continuing..."
+          gemini --version || echo "gemini CLI installed"
+
+      - name: Install OpenCode CLI
+        run: |
+          echo "Installing OpenCode CLI..."
+          npm install -g opencode-cli || echo "OpenCode CLI installation failed, continuing..."
+          opencode --version || echo "opencode CLI installed"
+
+      - name: Verify CLI installations
+        run: |
+          echo "Verifying CLI installations..."
+          echo "Claude CLI:"
+          which claude || echo "claude not found"
+          echo "Codex CLI (or symlink):"
+          which codex || echo "codex not found"
+          echo "OpenAI CLI:"
+          which openai || echo "openai not found"
+          echo "Copilot CLI:"
+          which copilot || echo "copilot not found"
+          echo "Gemini CLI:"
+          which gemini || echo "gemini not found"
+          echo "OpenCode CLI:"
+          which opencode || echo "opencode not found"
+
+          echo ""
+          echo "Listing all available CLI commands:"
+          ls -la /usr/local/bin/ | grep -E "(claude|codex|copilot|gemini|opencode)" || echo "No matching CLIs found"
 
       - name: Verify Claude API key
         id: verify-claude
