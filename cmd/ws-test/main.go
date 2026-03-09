@@ -42,7 +42,7 @@ type OutputBuffer struct {
 	mu       sync.Mutex
 	buffer   strings.Builder
 	lastType string
-	shown    bool   // Track if icon already shown
+	shown    bool // Track if icon already shown
 	timer    *time.Timer
 }
 
@@ -266,20 +266,20 @@ func handleMessage(msg Message, verbose bool) {
 func (b *OutputBuffer) add(text, typ string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	
+
 	// Fast path: type changed, flush previous buffer
 	if b.lastType != "" && b.lastType != typ {
 		if b.buffer.Len() > 0 {
 			b.doFlush()
 		}
 		fmt.Printf("\n")
-		b.shown = false  // Reset for new type
+		b.shown = false // Reset for new type
 	}
-	
+
 	// Append text using strings.Builder (efficient concatenation)
 	b.buffer.WriteString(text)
 	b.lastType = typ
-	
+
 	// Cancel existing timer (avoid multiple concurrent timers)
 	// Fixed: Properly drain timer channel to prevent race condition
 	if b.timer != nil && !b.timer.Stop() {
@@ -289,7 +289,7 @@ func (b *OutputBuffer) add(text, typ string) {
 		default:
 		}
 	}
-	
+
 	// Schedule flush after delay (debounce rapid chunks)
 	b.timer = time.AfterFunc(flushAfter, func() {
 		b.mu.Lock()
@@ -314,10 +314,10 @@ func (b *OutputBuffer) doFlush() {
 	if b.buffer.Len() == 0 {
 		return
 	}
-	
+
 	// Get buffer content once
 	content := b.buffer.String()
-	
+
 	// Print icon only once at the start
 	if !b.shown {
 		if b.lastType == "message" {
@@ -330,10 +330,10 @@ func (b *OutputBuffer) doFlush() {
 		// Subsequent chunks - just print text
 		fmt.Printf("%s", content)
 	}
-	
+
 	// Flush stdout immediately for streaming effect
 	os.Stdout.Sync()
-	
+
 	// Reset buffer (reuse the same builder to avoid reallocation)
 	b.buffer.Reset()
 }

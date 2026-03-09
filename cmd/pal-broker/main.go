@@ -128,7 +128,7 @@ func main() {
 
 	// Initialize CLI adapter
 	cliAdapter := adapter.NewAdapter(prov, *workDir)
-	log.Printf("Adapter initialized: provider=%s, mode=%v, supportsACP=%v", 
+	log.Printf("Adapter initialized: provider=%s, mode=%v, supportsACP=%v",
 		prov, cliAdapter.GetMode(), cliAdapter.GetMode() == adapter.ModeACP)
 
 	// Set CLI path if specified
@@ -206,7 +206,7 @@ func loadEnvFile(path string) {
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		
+
 		// Skip comments and empty lines
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue

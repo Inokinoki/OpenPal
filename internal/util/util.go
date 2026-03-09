@@ -81,10 +81,10 @@ func ParseTextOutput(line string) map[string]interface{} {
 			"content": line,
 		}
 	}
-	
+
 	// Single ToLower call for all keyword checks (Go's ToLower is highly optimized)
 	lower := strings.ToLower(line)
-	
+
 	// File operation keywords - check most common first
 	// Using direct Contains calls (Go 1.18+ uses SIMD optimizations)
 	if strings.Contains(lower, "editing") ||
@@ -120,7 +120,7 @@ func CloneMap(src map[string]interface{}) map[string]interface{} {
 	if src == nil {
 		return nil
 	}
-	
+
 	// Fast path: small maps use direct allocation (avoids pool overhead for tiny maps)
 	if len(src) <= 2 {
 		dst := make(map[string]interface{}, len(src))
@@ -129,12 +129,12 @@ func CloneMap(src map[string]interface{}) map[string]interface{} {
 		}
 		return dst
 	}
-	
+
 	// Get map from pool to reduce allocations for larger maps
 	dst := mapPool.Get().(map[string]interface{})
 	// Clear any existing data (use built-in clear() for Go 1.21+)
 	clear(dst)
-	
+
 	for k, v := range src {
 		dst[k] = CloneMapInterface(v)
 	}
@@ -145,7 +145,7 @@ func CloneMap(src map[string]interface{}) map[string]interface{} {
 // Optimized: uses sync.Pool for maps, direct allocation for slices, handles all JSON types
 // Single function for all clone operations
 // Enhanced: fast path for nil/empty inputs, optimized primitive type handling
-// 
+//
 // Type assertion order (based on JSON unmarshal frequency):
 // 1. string (~60-70%) - zero allocation
 // 2. float64 (~15-20%) - JSON numbers, zero allocation
@@ -153,7 +153,7 @@ func CloneMap(src map[string]interface{}) map[string]interface{} {
 // 4. map[string]interface{} (~10-15%) - uses pool
 // 5. []interface{} (~3-5%) - direct allocation
 // 6. Other (~1-2%) - fallback
-// 
+//
 // Performance: ~5-10ns primitives, ~50-100ns small maps, ~200-500ns complex nested
 // Optimization 2026-02-24 03:44: Combined primitive checks for better branch prediction
 // Further optimized 2026-02-24: Early nil check, reordered for better CPU branch prediction
@@ -162,7 +162,7 @@ func CloneMapInterface(src interface{}) interface{} {
 	if src == nil {
 		return nil
 	}
-	
+
 	// FAST PATH: JSON primitives (immutable, zero allocation, ~80% of cases)
 	// Switch statement optimized by Go compiler for type assertions
 	switch v := src.(type) {
@@ -173,7 +173,7 @@ func CloneMapInterface(src interface{}) interface{} {
 	case bool:
 		return v // Booleans (~5%)
 	}
-	
+
 	// COMMON: map[string]interface{} (JSON object, ~10-15% of cases)
 	// Inline check for empty map (avoids CloneMap overhead)
 	if val, ok := src.(map[string]interface{}); ok {
@@ -182,7 +182,7 @@ func CloneMapInterface(src interface{}) interface{} {
 		}
 		return CloneMap(val)
 	}
-	
+
 	// LESS COMMON: []interface{} (JSON array, ~3-5% of cases)
 	if val, ok := src.([]interface{}); ok {
 		if len(val) == 0 {
@@ -195,7 +195,7 @@ func CloneMapInterface(src interface{}) interface{} {
 		}
 		return result
 	}
-	
+
 	// RARE: other types (~1-2% of cases) - use switch for clarity
 	switch val := src.(type) {
 	case []string:
@@ -222,7 +222,7 @@ func CloneMapInterface(src interface{}) interface{} {
 		copy(result, val)
 		return result
 	}
-	
+
 	// FALLBACK: return as-is (int types, custom types, etc.)
 	return src
 }

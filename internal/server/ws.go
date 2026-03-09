@@ -156,11 +156,11 @@ type InputMessage struct {
 
 // connectionStats - Statistics for connection tracking
 type connectionStats struct {
-	totalConnections      int64 // Total connections since start
-	totalDisconnections   int64 // Total disconnections since start
-	peakConnections       int64 // Peak concurrent connections
-	currentConnections    int64 // Current active connections (atomic)
-	lastConnectionTime    int64 // Last connection timestamp (nanoseconds, for rate limiting)
+	totalConnections       int64 // Total connections since start
+	totalDisconnections    int64 // Total disconnections since start
+	peakConnections        int64 // Peak concurrent connections
+	currentConnections     int64 // Current active connections (atomic)
+	lastConnectionTime     int64 // Last connection timestamp (nanoseconds, for rate limiting)
 	rateLimitedConnections int64 // Count of connections rejected due to rate limiting (atomic)
 }
 
@@ -173,27 +173,27 @@ type connectionRateLimit struct {
 
 // WebSocketServer WebSocket server
 type WebSocketServer struct {
-	stateMgr    *state.Manager
-	taskID      string
-	cli         *adapter.CLIProcess
-	cliAdapter  *adapter.Manager // CLI adapter for starting CLI on demand
-	clients     map[string]*WebSocketClient
-	mu          sync.RWMutex
-	broadcastCh chan state.Event
-	errorCh     chan error
-	historyFile *os.File // File for saving CLI interaction history
-	config      ClientConfig
-	ctx         context.Context
-	cancel      context.CancelFunc
-	wg          sync.WaitGroup
-	cliStarted  atomic.Bool // Track if CLI has been started (atomic for thread safety)
-	inputQueue  chan InputMessage // Queue for input messages
-	sessionDir  string // Directory for session files
-	startedAt   time.Time // Server start time for uptime calculation
-	stats       connectionStats // Connection statistics
-	broadcastRateLimit int64 // Max broadcasts per second (0 = disabled)
-	lastBroadcast    int64 // Last broadcast timestamp (atomic, Unix nanoseconds)
-	connRateLimit    connectionRateLimit // Connection rate limiting
+	stateMgr           *state.Manager
+	taskID             string
+	cli                *adapter.CLIProcess
+	cliAdapter         *adapter.Manager // CLI adapter for starting CLI on demand
+	clients            map[string]*WebSocketClient
+	mu                 sync.RWMutex
+	broadcastCh        chan state.Event
+	errorCh            chan error
+	historyFile        *os.File // File for saving CLI interaction history
+	config             ClientConfig
+	ctx                context.Context
+	cancel             context.CancelFunc
+	wg                 sync.WaitGroup
+	cliStarted         atomic.Bool         // Track if CLI has been started (atomic for thread safety)
+	inputQueue         chan InputMessage   // Queue for input messages
+	sessionDir         string              // Directory for session files
+	startedAt          time.Time           // Server start time for uptime calculation
+	stats              connectionStats     // Connection statistics
+	broadcastRateLimit int64               // Max broadcasts per second (0 = disabled)
+	lastBroadcast      int64               // Last broadcast timestamp (atomic, Unix nanoseconds)
+	connRateLimit      connectionRateLimit // Connection rate limiting
 }
 
 // ClientMessage Client message
@@ -240,8 +240,8 @@ func NewWebSocketServer(stateMgr *state.Manager, taskID string, cliAdapter *adap
 			EnableHeartbeat:   true,
 			ReconnectEnabled:  true,
 		},
-		ctx:              ctx,
-		cancel:           cancel,
+		ctx:                ctx,
+		cancel:             cancel,
 		broadcastRateLimit: 0, // Disabled by default
 	}
 	// cliStarted defaults to false (atomic.Bool zero value)
@@ -298,7 +298,7 @@ func (s *WebSocketServer) checkConnectionRateLimit() bool {
 // Start Start server
 func (s *WebSocketServer) Start(addr string) (int, error) {
 	http.HandleFunc("/ws", s.handleWebSocket)
-	http.HandleFunc("/health", s.handleHealth) // HealthCheckEndpoint
+	http.HandleFunc("/health", s.handleHealth)   // HealthCheckEndpoint
 	http.HandleFunc("/metrics", s.handleMetrics) // Prometheus-style metrics
 
 	listener, err := net.Listen("tcp", addr)
@@ -1198,7 +1198,7 @@ func (s *WebSocketServer) sendToCLI(inputMsg InputMessage) {
 	// Append newline and write (single allocation for write buffer)
 	writeBuf := append(data, '\n')
 	n, err := cli.Stdin.Write(writeBuf)
-	
+
 	if err != nil {
 		util.DebugLog("[DEBUG] sendToCLI: write failed (wrote=%d/%d): %v", n, len(data), err)
 		return
@@ -1404,7 +1404,7 @@ func (s *WebSocketServer) logEventToHistory(event state.Event) {
 // Enhanced: pre-allocates error batch capacity, reduces error formatting for transient errors
 // Further optimized: pre-calculates event JSON once for all clients (reduces marshal overhead)
 // Ultra-optimized: fast path for single-client scenario (most common case in integration tests)
-// 
+//
 // Optimization 2026-02-23: Pre-serialize event JSON once to avoid repeated marshaling
 // Optimization 2026-02-24: Early history logging, simplified single-client path
 // Optimization 2026-02-24 03:44: Added client count check before JSON marshal (saves marshal on empty)
@@ -1709,10 +1709,10 @@ func (s *WebSocketServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 	// Add connection statistics for observability
 	response["connection_stats"] = map[string]interface{}{
-		"total_connections":       atomic.LoadInt64(&s.stats.totalConnections),
-		"total_disconnections":    atomic.LoadInt64(&s.stats.totalDisconnections),
-		"peak_connections":        atomic.LoadInt64(&s.stats.peakConnections),
-		"current_connections":     atomic.LoadInt64(&s.stats.currentConnections),
+		"total_connections":        atomic.LoadInt64(&s.stats.totalConnections),
+		"total_disconnections":     atomic.LoadInt64(&s.stats.totalDisconnections),
+		"peak_connections":         atomic.LoadInt64(&s.stats.peakConnections),
+		"current_connections":      atomic.LoadInt64(&s.stats.currentConnections),
 		"rate_limited_connections": atomic.LoadInt64(&s.stats.rateLimitedConnections),
 	}
 
@@ -2038,7 +2038,7 @@ func (s *WebSocketServer) queueInputWithLogging(entryType, content string) {
 		Content: content,
 		Type:    entryType,
 	}
-	
+
 	select {
 	case s.inputQueue <- inputMsg:
 		// Successfully queued - start CLI processor if not already started
@@ -2083,13 +2083,13 @@ func getErrorBatch() *errorBatch {
 func putErrorBatch(eb *errorBatch) {
 	// Reset length
 	eb.errors = eb.errors[:0]
-	
+
 	// Cap capacity to prevent memory bloat (32 is sufficient for 99%+ of scenarios)
 	// Rare high-error broadcasts can grow the slice, but we shrink it on return
 	if cap(eb.errors) > 64 {
 		eb.errors = make([]error, 0, 32)
 	}
-	
+
 	errorBatchPool.Put(eb)
 }
 
