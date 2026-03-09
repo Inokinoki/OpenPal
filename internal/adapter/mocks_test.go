@@ -525,6 +525,11 @@ func TestAdapterStreamProcessing(t *testing.T) {
 
 // TestAdapterTimeout Test timeout handling
 func TestAdapterTimeout(t *testing.T) {
+	// Skip on Windows as the mock script format is not compatible
+	if strings.HasPrefix(os.Getenv("RUNNER_OS"), "Windows") {
+		t.Skip("Skipping timeout test on Windows due to script format incompatibility")
+	}
+
 	// Create a mock CLI that times out
 	mockScript := `#!/bin/bash
 sleep 10
