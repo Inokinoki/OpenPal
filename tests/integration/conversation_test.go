@@ -362,7 +362,7 @@ func TestCopilot_ACP_3TurnConversation(t *testing.T) {
 	sessionID := extractSessionID(sessionResp)
 	t.Logf("Testing prompt sending with session ID: %s", sessionID)
 
-	// Turn 1: Send first prompt
+	// Turn 1: Send first prompt (don't try to read response - Copilot ACP won't respond to simple prompts)
 	sendACPRequest(t, stdin, 3, "session/prompt", map[string]interface{}{
 		"sessionId": sessionID,
 		"prompt": []map[string]string{
@@ -371,13 +371,8 @@ func TestCopilot_ACP_3TurnConversation(t *testing.T) {
 	})
 	t.Log("Turn 1: Prompt sent successfully")
 
-	// Try to drain any immediate response with very short timeout
-	resp1 := readACPMessages(t, stdout, 2*time.Second)
-	if len(resp1) > 0 {
-		t.Logf("Turn 1 received %d messages", len(resp1))
-	} else {
-		t.Log("Turn 1: No immediate response (expected)")
-	}
+	// Small delay between prompts
+	time.Sleep(500 * time.Millisecond)
 
 	// Turn 2: Send second prompt
 	sendACPRequest(t, stdin, 4, "session/prompt", map[string]interface{}{
@@ -388,12 +383,7 @@ func TestCopilot_ACP_3TurnConversation(t *testing.T) {
 	})
 	t.Log("Turn 2: Prompt sent successfully")
 
-	resp2 := readACPMessages(t, stdout, 2*time.Second)
-	if len(resp2) > 0 {
-		t.Logf("Turn 2 received %d messages", len(resp2))
-	} else {
-		t.Log("Turn 2: No immediate response")
-	}
+	time.Sleep(500 * time.Millisecond)
 
 	// Turn 3: Send third prompt
 	sendACPRequest(t, stdin, 5, "session/prompt", map[string]interface{}{
@@ -403,13 +393,6 @@ func TestCopilot_ACP_3TurnConversation(t *testing.T) {
 		},
 	})
 	t.Log("Turn 3: Prompt sent successfully")
-
-	resp3 := readACPMessages(t, stdout, 2*time.Second)
-	if len(resp3) > 0 {
-		t.Logf("Turn 3 received %d messages", len(resp3))
-	} else {
-		t.Log("Turn 3: No immediate response")
-	}
 
 	// Success if we could send all prompts without timeout
 	t.Log("SUCCESS: Copilot ACP connection working - all prompts sent successfully")
