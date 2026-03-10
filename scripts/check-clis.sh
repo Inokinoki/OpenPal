@@ -52,7 +52,7 @@ check_cli "GitHub Copilot" "command -v copilot" \
     "Install: npm install -g @github/copilot-cli"
 
 check_cli "OpenCode" "command -v opencode" \
-    "Install from: https://github.com/opencode/opencode"
+    "Install: npm i -g opencode-ai"
 
 echo ""
 echo "Development Tools:"
