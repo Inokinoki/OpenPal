@@ -210,175 +210,60 @@ jobs:
           mkdir -p /tmp/workspace
           mkdir -p /tmp/pal-broker-sessions
 
-      - name: Install CLIs or create functional mocks
+      - name: Install Claude Code CLI
         run: |
-          echo "Installing CLIs or creating functional mocks for testing..."
+          echo "Installing Claude Code CLI..."
+          # Install using npm package
+          npm install -g @anthropic-ai/claude-code || echo "Claude CLI installation failed"
+          export PATH="$HOME/.local/bin:$PATH"
 
-          # Try to install real CLIs, fall back to functional mocks
-          mkdir -p /tmp/mock-clis
+      - name: Install OpenAI CLI
+        run: |
+          echo "Installing OpenAI CLI..."
+          npm install -g openai || echo "OpenAI CLI installation failed"
 
-          # Claude CLI - try install or create mock
-          if curl -fsSL https://claude.ai/install.sh -o /tmp/install-claude.sh 2>/dev/null; then
-            bash /tmp/install-claude.sh 2>/dev/null && export PATH="$HOME/.local/bin:$PATH" && claude --version || {
-              echo "Claude installation failed, creating functional mock..."
-              cat > /tmp/mock-clis/claude << 'EOF'
-          #!/bin/bash
-          if [[ "$1" == "-p" ]] || [[ "$1" == "--prompt" ]]; then
-            shift
-            prompt="$@"
-            if echo "$prompt" | grep -qi "file"; then
-              echo '{"type":"assistant","content":"I can help with file operations. Reading test.txt..."}'
-              echo '{"type":"tool_use","tool_use":{"name":"read_file","input":{"file_path":"test.txt"}}}'
-              echo '{"type":"chunk","content":"File content: Hello, World!"}'
-            else
-              echo '{"type":"assistant","content":"Mock Claude response for testing with real API keys"}'
-            fi
-          else
-            echo "Mock Claude CLI v1.0.0"
+      - name: Install GitHub Copilot CLI
+        run: |
+          echo "Installing GitHub Copilot CLI..."
+          # Install using npm
+          npm install -g github-copilot-cli || echo "Copilot CLI installation failed"
+
+      - name: Install Gemini CLI
+        run: |
+          echo "Installing Gemini CLI..."
+          # Install using npm
+          npm install -g @google-cloud/generative-ai-cli || echo "Gemini CLI installation failed"
+
+      - name: Create codex symlink
+        run: |
+          echo "Creating codex symlink..."
+          # Link openai to codex if openai is installed
+          if command -v openai &> /dev/null; then
+            sudo ln -sf $(which openai) /usr/local/bin/codex || echo "Could not create codex symlink"
           fi
-          EOF
-              chmod +x /tmp/mock-clis/claude
-            }
-          else
-            echo "Creating Claude mock..."
-            cat > /tmp/mock-clis/claude << 'EOF'
-          #!/bin/bash
-          if [[ "$1" == "-p" ]] || [[ "$1" == "--prompt" ]]; then
-            shift
-            prompt="$@"
-            if echo "$prompt" | grep -qi "file"; then
-              echo '{"type":"assistant","content":"I can help with file operations. Reading test.txt..."}'
-              echo '{"type":"tool_use","tool_use":{"name":"read_file","input":{"file_path":"test.txt"}}}'
-              echo '{"type":"chunk","content":"File content: Hello, World!"}'
-            else
-              echo '{"type":"assistant","content":"Mock Claude response for testing with real API keys"}'
-            fi
-          else
-            echo "Mock Claude CLI v1.0.0"
-          fi
-          EOF
-            chmod +x /tmp/mock-clis/claude
-          fi
-
-          # OpenAI CLI - install and create codex symlink
-          if command -v npm &> /dev/null; then
-            npm install -g openai 2>/dev/null || echo "OpenAI CLI install failed, creating codex mock..."
-          fi
-          if ! command -v codex &> /dev/null; then
-            echo "Creating codex mock..."
-            cat > /tmp/mock-clis/codex << 'EOF'
-          #!/bin/bash
-          if [[ "$1" == "exec" ]]; then
-            shift
-            prompt="$@"
-            if echo "$prompt" | grep -qi "file"; then
-              echo '{"response":"Reading file with OpenAI API..."}'
-              echo '{"content":"File content: Test content for Codex"}'
-            else
-              echo '{"response":"Mock Codex response for testing with real API keys"}'
-            fi
-          elif [[ "$1" == "resume" ]] && [[ "$2" == "--last" ]]; then
-            echo '{"response":"Mock Codex session resumed"}'
-          else
-            echo "Mock Codex CLI v1.0.0"
-          fi
-          EOF
-            chmod +x /tmp/mock-clis/codex
-          fi
-
-          # Copilot CLI - create mock (package doesn't exist)
-          echo "Creating copilot mock..."
-          cat > /tmp/mock-clis/copilot << 'EOF'
-          #!/bin/bash
-          if [[ "$1" == "--acp" ]] && [[ "$2" == "--stdio" ]]; then
-            # ACP mode - respond immediately without closing stdout
-            while IFS= read -r line; do
-              if [[ -n "$line" ]]; then
-                # Extract request ID
-                req_id=$(echo "$line" | grep -o '"id":[0-9]*' | cut -d: -f2)
-                [[ -z "$req_id" ]] && req_id=0
-
-                # Extract method
-                method=$(echo "$line" | grep -o '"method":"[^"]*"' | cut -d: -f2 | tr -d '"')
-
-                case "$method" in
-                  "initialize")
-                    echo '{"jsonrpc":"2.0","id":'$(($req_id))',"result":{"protocolVersion":1,"serverInfo":{"name":"mock-copilot","version":"1.0.0"}}}'
-                    ;;
-                  "session/new")
-                    echo '{"jsonrpc":"2.0","id":'$(($req_id))',"result":{"sessionId":"mock-session-'$(date +%s)'","capabilities":{}}}'
-                    ;;
-                  "session/prompt")
-                    # Send the expected response
-                    echo '{"jsonrpc":"2.0","id":'$(($req_id))',"result":{"message":{"role":"assistant","content":{"text":"Mock response: 2+2=4"}}}}'
-                    ;;
-                  *)
-                    echo '{"jsonrpc":"2.0","id":'$(($req_id))',"result":{}}'
-                    ;;
-                esac
-                # Small delay to ensure message delivery
-                sleep 0.1
-              fi
-            done
-          else
-            echo "Mock Copilot CLI v1.0.0"
-          fi
-          EOF
-          chmod +x /tmp/mock-clis/copilot
-
-          # Gemini CLI - create mock (package doesn't exist)
-          echo "Creating gemini mock..."
-          cat > /tmp/mock-clis/gemini << 'EOF'
-          #!/bin/bash
-          if [[ "$1" == "chat" ]] && [[ "$2" == "--prompt" ]]; then
-            echo '{"response":"Mock Gemini response for testing with real API keys"}'
-          else
-            echo "Mock Gemini CLI v1.0.0"
-          fi
-          EOF
-          chmod +x /tmp/mock-clis/gemini
-
-          # OpenCode CLI - create mock (repo doesn't exist)
-          echo "Creating opencode mock..."
-          cat > /tmp/mock-clis/opencode << 'EOF'
-          #!/bin/bash
-          if [[ "$1" == "acp" ]]; then
-            echo '{"jsonrpc":"2.0","id":1,"result":{"status":"ready"}}'
-          else
-            echo "Mock OpenCode CLI v1.0.0"
-          fi
-          EOF
-          chmod +x /tmp/mock-clis/opencode
-
-          # Add mock CLIs to PATH
-          echo "/tmp/mock-clis" >> $GITHUB_PATH
-
-          echo "CLI setup complete (mix of real and mock CLIs)"
 
       - name: Verify CLI installations
         run: |
           echo "Verifying CLI installations..."
-          export PATH="/tmp/mock-clis:$HOME/.local/bin:$PATH:$HOME/go/bin"
+          export PATH="$HOME/.local/bin:$PATH"
 
           echo "Claude CLI: $(which claude || echo 'not found')"
           echo "Codex CLI: $(which codex || echo 'not found')"
           echo "OpenAI CLI: $(which openai || echo 'not found')"
           echo "Copilot CLI: $(which copilot || echo 'not found')"
           echo "Gemini CLI: $(which gemini || echo 'not found')"
-          echo "OpenCode CLI: $(which opencode || echo 'not found')"
 
           # Test basic functionality
           echo ""
           echo "Testing CLI availability..."
-          command -v claude && echo "✓ claude available (will use real or mock)" || echo "✗ claude not available"
-          command -v codex && echo "✓ codex available (will use real or mock)" || echo "✗ codex not available"
-          command -v openai && echo "✓ openai available (real CLI)" || echo "✗ openai not available"
-          command -v copilot && echo "✓ copilot available (will use real or mock)" || echo "✗ copilot not available"
-          command -v gemini && echo "✓ gemini available (will use real or mock)" || echo "✗ gemini not available (will skip tests)"
-          command -v opencode && echo "✓ opencode available (will use real or mock)" || echo "✗ opencode not available"
+          command -v claude && echo "✓ claude available" || echo "✗ claude not available (will skip tests)"
+          command -v codex && echo "✓ codex available" || echo "✗ codex not available (will skip tests)"
+          command -v openai && echo "✓ openai available" || echo "✗ openai not available"
+          command -v copilot && echo "✓ copilot available" || echo "✗ copilot not available (will skip tests)"
+          command -v gemini && echo "✓ gemini available" || echo "✗ gemini not available (will skip tests)"
 
           echo ""
-          echo "CLIs are ready for integration testing"
+          echo "Real CLIs will use configured API keys from environment"
 
       - name: Run integration tests
         run: |

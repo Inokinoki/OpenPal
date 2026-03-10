@@ -296,7 +296,7 @@ func TestCopilot_ACP_3TurnConversation(t *testing.T) {
 		},
 	})
 
-	resp1 := readACPMessages(t, stdout, 2*time.Second)
+	resp1 := readACPMessages(t, stdout, 5*time.Second)
 	t.Logf("Turn 1 received %d messages", len(resp1))
 
 	// Turn 2: Follow-up prompt
@@ -307,7 +307,7 @@ func TestCopilot_ACP_3TurnConversation(t *testing.T) {
 		},
 	})
 
-	resp2 := readACPMessages(t, stdout, 2*time.Second)
+	resp2 := readACPMessages(t, stdout, 5*time.Second)
 	t.Logf("Turn 2 received %d messages", len(resp2))
 
 	// Turn 3: Another follow-up
@@ -318,15 +318,7 @@ func TestCopilot_ACP_3TurnConversation(t *testing.T) {
 		},
 	})
 
-	resp3 := readACPMessages(t, stdout, 2*time.Second)
-	t.Logf("Turn 3 received %d messages", len(resp3))
-
-	// If we're using a mock CLI (detected by 0 messages),
-	// the test still passes as long as we didn't crash
-	if len(resp1) == 0 && len(resp2) == 0 && len(resp3) == 0 {
-		t.Log("Mock CLI detected - ACP protocol test completed (limited functionality)")
-		return // Test passes rather than failing
-	}
+	resp3 := readACPMessages(t, stdout, 5*time.Second)
 	t.Logf("Turn 3 received %d messages", len(resp3))
 
 	// Verify we got responses
@@ -451,8 +443,6 @@ func readACPMessages(t *testing.T, stdout io.ReadCloser, timeout time.Duration) 
 	var messages []string
 	scanner := bufio.NewScanner(stdout)
 	deadline := time.After(timeout)
-	messageCount := 0
-	maxMessages := 3 // Limit messages to prevent hanging
 
 	for {
 		select {
@@ -461,12 +451,6 @@ func readACPMessages(t *testing.T, stdout io.ReadCloser, timeout time.Duration) 
 				line := scanner.Text()
 				if line != "" {
 					messages = append(messages, line)
-					messageCount++
-					// Stop after receiving a few messages to prevent hanging
-					if messageCount >= maxMessages {
-						t.Logf("Received %d messages, stopping scan", messageCount)
-						return messages
-					}
 				}
 			} else {
 				return messages
