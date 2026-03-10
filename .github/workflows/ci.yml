@@ -232,16 +232,24 @@ jobs:
           echo "Installing Gemini CLI..."
           npm install -g @google/gemini-cli || echo "Gemini CLI installation failed"
 
+      - name: Install OpenCode CLI
+        run: |
+          echo "Installing OpenCode CLI..."
+          npm i -g opencode-ai
+          export PATH="$(npm prefix -g)/bin:$PATH"
+          opencode --version || echo "opencode CLI installed"
+
       - name: Verify CLI installations
         run: |
           echo "Verifying CLI installations..."
-          export PATH="$HOME/.local/bin:$PATH"
+          export PATH="$HOME/.local/bin:$(npm prefix -g)/bin:$PATH"
 
           echo "Claude CLI: $(which claude || echo 'not found')"
           echo "Codex CLI: $(which codex || echo 'not found')"
           echo "OpenAI CLI: $(which openai || echo 'not found')"
           echo "Copilot CLI: $(which copilot || echo 'not found')"
           echo "Gemini CLI: $(which gemini || echo 'not found')"
+          echo "OpenCode CLI: $(which opencode || echo 'not found')"
 
           # Test basic functionality
           echo ""
@@ -251,6 +259,7 @@ jobs:
           command -v openai && echo "✓ openai available" || echo "✗ openai not available"
           command -v copilot && echo "✓ copilot available" || echo "✗ copilot not available (will skip tests)"
           command -v gemini && echo "✓ gemini available" || echo "✗ gemini not available (will skip tests)"
+          command -v opencode && echo "✓ opencode available" || echo "✗ opencode not available (will skip tests)"
 
           echo ""
           echo "Real CLIs will use configured API keys from environment"
@@ -291,7 +300,7 @@ jobs:
       - name: Run integration tests
         run: |
           echo "Running integration tests..."
-          export PATH="$PWD:$PATH:$HOME/.local/bin"
+          export PATH="$PWD:$PATH:$HOME/.local/bin:$(npm prefix -g)/bin"
           echo "Available API keys:"
           [ -n "$ANTHROPIC_API_KEY" ] && echo "✓ ANTHROPIC_API_KEY" || echo "✗ ANTHROPIC_API_KEY"
           [ -n "$CLAUDE_API_KEY" ] && echo "✓ CLAUDE_API_KEY" || echo "✗ CLAUDE_API_KEY"
@@ -303,6 +312,13 @@ jobs:
           echo ""
           echo "Checking pal-broker in PATH:"
           which pal-broker || echo "pal-broker not found"
+          echo ""
+          echo "Checking for npm-installed CLIs:"
+          which opencode && echo "✓ opencode found" || echo "✗ opencode not found"
+          which claude && echo "✓ claude found" || echo "✗ claude not found"
+          which codex && echo "✓ codex found" || echo "✗ codex not found"
+          which copilot && echo "✓ copilot found" || echo "✗ copilot not found"
+          which gemini && echo "✓ gemini found" || echo "✗ gemini not found"
           echo ""
           go test -tags=integration -v ./tests/integration/...
 
