@@ -72,6 +72,10 @@ func TestClaude_3TurnConversation(t *testing.T) {
 
 	output2, err2 := cmd2.CombinedOutput()
 	if err2 != nil {
+		// In CI, fail if turn 2 doesn't work
+		if os.Getenv("CI") != "" {
+			t.Fatalf("Turn 2 failed in CI: %v\nOutput: %s", err2, string(output2))
+		}
 		t.Logf("Turn 2 warning: %v", err2)
 	} else {
 		t.Logf("Turn 2 output length: %d", len(output2))
@@ -92,6 +96,10 @@ func TestClaude_3TurnConversation(t *testing.T) {
 
 	output3, err3 := cmd3.CombinedOutput()
 	if err3 != nil {
+		// In CI, fail if turn 3 doesn't work
+		if os.Getenv("CI") != "" {
+			t.Fatalf("Turn 3 failed in CI: %v\nOutput: %s", err3, string(output3))
+		}
 		t.Logf("Turn 3 warning: %v", err3)
 	} else {
 		t.Logf("Turn 3 output length: %d", len(output3))
@@ -102,19 +110,24 @@ func TestClaude_3TurnConversation(t *testing.T) {
 		t.Error("Expected output from turn 1")
 	}
 
-	// Verify we got outputs from most turns
+	// Verify we got successful outputs from turns (not just errors)
 	successCount := 0
-	if len(output1) > 0 {
+	if err1 == nil && len(output1) > 0 {
 		successCount++
 	}
-	if len(output2) > 0 {
+	if err2 == nil && len(output2) > 0 {
 		successCount++
 	}
-	if len(output3) > 0 {
+	if err3 == nil && len(output3) > 0 {
 		successCount++
 	}
 
 	t.Logf("3-turn conversation test completed: %d/3 turns successful", successCount)
+
+	// In CI, require at least 2 out of 3 turns to succeed
+	if os.Getenv("CI") != "" && successCount < 2 {
+		t.Fatalf("3-turn conversation failed in CI: only %d/3 turns succeeded", successCount)
+	}
 
 	// Success if at least 2 out of 3 turns worked
 	if successCount < 2 {
@@ -155,6 +168,9 @@ func TestCodex_3TurnConversation(t *testing.T) {
 	output2, err2 := cmd2.CombinedOutput()
 
 	if err2 != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatalf("Turn 2 failed in CI: %v\nOutput: %s", err2, string(output2))
+		}
 		t.Logf("Turn 2 warning: %v", err2)
 	} else {
 		t.Logf("Turn 2 output: %s", string(output2))
@@ -166,6 +182,9 @@ func TestCodex_3TurnConversation(t *testing.T) {
 	output3, err3 := cmd3.CombinedOutput()
 
 	if err3 != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatalf("Turn 3 failed in CI: %v\nOutput: %s", err3, string(output3))
+		}
 		t.Logf("Turn 3 warning: %v", err3)
 	} else {
 		t.Logf("Turn 3 output: %s", string(output3))
@@ -176,7 +195,24 @@ func TestCodex_3TurnConversation(t *testing.T) {
 		t.Error("Expected output from turn 1")
 	}
 
-	t.Log("Codex 3-turn conversation test completed")
+	// Count successful turns (command succeeded with output)
+	successCount := 0
+	if err1 == nil && len(output1) > 0 {
+		successCount++
+	}
+	if err2 == nil && len(output2) > 0 {
+		successCount++
+	}
+	if err3 == nil && len(output3) > 0 {
+		successCount++
+	}
+
+	t.Logf("Codex 3-turn conversation test completed: %d/3 turns successful", successCount)
+
+	// In CI, require at least 2 out of 3 turns to succeed
+	if os.Getenv("CI") != "" && successCount < 2 {
+		t.Fatalf("Codex 3-turn conversation failed in CI: only %d/3 turns succeeded", successCount)
+	}
 }
 
 // TestGemini_3TurnConversation - Test Gemini with 3-turn conversation
@@ -213,6 +249,9 @@ func TestGemini_3TurnConversation(t *testing.T) {
 	output2, err2 := cmd2.CombinedOutput()
 
 	if err2 != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatalf("Turn 2 failed in CI: %v\nOutput: %s", err2, string(output2))
+		}
 		t.Logf("Turn 2 warning: %v", err2)
 	} else {
 		t.Logf("Turn 2 output length: %d", len(output2))
@@ -225,6 +264,9 @@ func TestGemini_3TurnConversation(t *testing.T) {
 	output3, err3 := cmd3.CombinedOutput()
 
 	if err3 != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatalf("Turn 3 failed in CI: %v\nOutput: %s", err3, string(output3))
+		}
 		t.Logf("Turn 3 warning: %v", err3)
 	} else {
 		t.Logf("Turn 3 output length: %d", len(output3))
@@ -235,7 +277,24 @@ func TestGemini_3TurnConversation(t *testing.T) {
 		t.Error("Expected output from turn 1")
 	}
 
-	t.Log("Gemini 3-turn conversation test completed")
+	// Count successful turns (command succeeded with output)
+	successCount := 0
+	if err1 == nil && len(output1) > 0 {
+		successCount++
+	}
+	if err2 == nil && len(output2) > 0 {
+		successCount++
+	}
+	if err3 == nil && len(output3) > 0 {
+		successCount++
+	}
+
+	t.Logf("Gemini 3-turn conversation test completed: %d/3 turns successful", successCount)
+
+	// In CI, require at least 2 out of 3 turns to succeed
+	if os.Getenv("CI") != "" && successCount < 2 {
+		t.Fatalf("Gemini 3-turn conversation failed in CI: only %d/3 turns succeeded", successCount)
+	}
 }
 
 // TestCopilot_ACP_3TurnConversation - Test Copilot with 3-turn conversation (ACP mode)
