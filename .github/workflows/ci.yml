@@ -4,7 +4,8 @@ on:
   push:
     branches: [ main ]
   pull_request:
-    branches: [ main ]
+    branches: [ main ]  # Run integration tests on PRs to main
+  workflow_dispatch:
 
 jobs:
   # 完整 CI 流程（使用 Makefile）
@@ -210,37 +211,26 @@ jobs:
           mkdir -p /tmp/workspace
           mkdir -p /tmp/pal-broker-sessions
 
+      - name: Install Codex CLI
+        run: |
+          echo "Installing Codex CLI..."
+          npm install -g @openai/codex || echo "Codex CLI installation failed"
+
       - name: Install Claude Code CLI
         run: |
           echo "Installing Claude Code CLI..."
-          # Install using npm package
           npm install -g @anthropic-ai/claude-code || echo "Claude CLI installation failed"
           export PATH="$HOME/.local/bin:$PATH"
-
-      - name: Install OpenAI CLI
-        run: |
-          echo "Installing OpenAI CLI..."
-          npm install -g openai || echo "OpenAI CLI installation failed"
 
       - name: Install GitHub Copilot CLI
         run: |
           echo "Installing GitHub Copilot CLI..."
-          # Install using npm
           npm install -g github-copilot-cli || echo "Copilot CLI installation failed"
 
       - name: Install Gemini CLI
         run: |
           echo "Installing Gemini CLI..."
-          # Install using npm
           npm install -g @google-cloud/generative-ai-cli || echo "Gemini CLI installation failed"
-
-      - name: Create codex symlink
-        run: |
-          echo "Creating codex symlink..."
-          # Link openai to codex if openai is installed
-          if command -v openai &> /dev/null; then
-            sudo ln -sf $(which openai) /usr/local/bin/codex || echo "Could not create codex symlink"
-          fi
 
       - name: Verify CLI installations
         run: |
