@@ -63,6 +63,9 @@ jobs:
       PAL_SESSION_DIR: /tmp/pal-broker-sessions
       CGO_ENABLED: 0
 
+      # Ensure npm global bin is in PATH for all npm-installed CLIs
+      PATH: "/usr/local/bin:$(npm prefix -g)/bin:$PATH"
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -109,8 +112,8 @@ jobs:
       - name: Install OpenCode CLI
         run: |
           echo "Installing OpenCode CLI..."
-          npm i -g opencode-ai || echo "OpenCode CLI installation failed, continuing..."
-          opencode --version || echo "opencode CLI installed"
+          npm i -g opencode-ai
+          opencode --version
 
       - name: Verify CLI installations
         run: |
