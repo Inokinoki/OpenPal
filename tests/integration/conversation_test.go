@@ -61,11 +61,11 @@ func TestClaude_3TurnConversation(t *testing.T) {
 	var cmd2 *exec.Cmd
 	if sessionID != "" {
 		cmd2 = exec.Command("claude", "-p", "--output-format", "stream-json",
-			"--resume", sessionID, "What number did I ask you to remember?")
+			"--verbose", "--resume", sessionID, "What number did I ask you to remember?")
 	} else {
 		// Fallback: try without session resume
 		cmd2 = exec.Command("claude", "-p", "--output-format", "stream-json",
-			"What is 2+2?")
+			"--verbose", "What is 2+2?")
 	}
 	cmd2.Dir = tmpDir
 	cmd2.Env = os.Environ()
@@ -85,11 +85,11 @@ func TestClaude_3TurnConversation(t *testing.T) {
 	var cmd3 *exec.Cmd
 	if sessionID != "" {
 		cmd3 = exec.Command("claude", "-p", "--output-format", "stream-json",
-			"--resume", sessionID, "Multiply that number by 2")
+			"--verbose", "--resume", sessionID, "Multiply that number by 2")
 	} else {
 		// Fallback: try without session resume
 		cmd3 = exec.Command("claude", "-p", "--output-format", "stream-json",
-			"What is 3+3?")
+			"--verbose", "What is 3+3?")
 	}
 	cmd3.Dir = tmpDir
 	cmd3.Env = os.Environ()
