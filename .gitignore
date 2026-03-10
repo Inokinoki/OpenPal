@@ -35,6 +35,7 @@ ws_port
 
 # Markdown files (except AGENTS.md)
 *.md
+!README.md
 !AGENTS.md
 
 # Secrets

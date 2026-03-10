@@ -11,6 +11,9 @@
    - Example: `// Initialize the server` ✅
    - Example: `// 初始化服务器` ❌
 
+3. **Do NOT commit with co-author**
+   - Only the already configured identity should be used to commit
+
 ## Why?
 
 - **No Markdown commits**: Keep the repo focused on code. Documentation is generated or maintained separately.
