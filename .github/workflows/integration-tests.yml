@@ -63,9 +63,6 @@ jobs:
       PAL_SESSION_DIR: /tmp/pal-broker-sessions
       CGO_ENABLED: 0
 
-      # Ensure npm global bin is in PATH for all npm-installed CLIs
-      PATH: "/usr/local/bin:$(npm prefix -g)/bin:$PATH"
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -88,7 +85,8 @@ jobs:
       - name: Install OpenAI CLI (for Codex)
         run: |
           echo "Installing OpenAI CLI..."
-          npm install -g @openai/openai-cli || echo "OpenAI CLI installation failed, continuing..."
+          npm install -g @openai/openai-cli
+          export PATH="$(npm prefix -g)/bin:$PATH"
 
           # Create symlink for codex command compatibility
           if command -v openai &> /dev/null; then
@@ -100,24 +98,32 @@ jobs:
       - name: Install GitHub Copilot CLI
         run: |
           echo "Installing GitHub Copilot CLI..."
-          npm install -g @github-copilot-cli/cli || echo "Copilot CLI installation failed, continuing..."
+          npm install -g @github-copilot-cli/cli
+          export PATH="$(npm prefix -g)/bin:$PATH"
           copilot --version || echo "copilot CLI installed"
 
       - name: Install Google Gemini CLI (gemini-cli)
         run: |
           echo "Installing Gemini CLI..."
-          npm install -g gemini-cli || echo "Gemini CLI installation failed, continuing..."
+          npm install -g gemini-cli
+          export PATH="$(npm prefix -g)/bin:$PATH"
           gemini --version || echo "gemini CLI installed"
 
       - name: Install OpenCode CLI
         run: |
           echo "Installing OpenCode CLI..."
           npm i -g opencode-ai
+          echo "npm prefix -g: $(npm prefix -g)"
+          echo "Adding npm global bin to PATH..."
+          export PATH="$(npm prefix -g)/bin:$PATH"
+          echo "PATH: $PATH"
+          which opencode || echo "opencode not found in PATH"
           opencode --version
 
       - name: Verify CLI installations
         run: |
           echo "Verifying CLI installations..."
+          export PATH="$(npm prefix -g)/bin:$PATH"
           echo "Claude CLI:"
           which claude || echo "claude not found"
           echo "Codex CLI (or symlink):"
@@ -134,6 +140,17 @@ jobs:
           echo ""
           echo "Listing all available CLI commands:"
           ls -la /usr/local/bin/ | grep -E "(claude|codex|copilot|gemini|opencode)" || echo "No matching CLIs found"
+
+          echo ""
+          echo "Testing OpenCode CLI specifically:"
+          if command -v opencode &> /dev/null; then
+            echo "✓ opencode found at: $(which opencode)"
+            opencode --version || echo "Could not get opencode version"
+          else
+            echo "✗ opencode not found"
+            echo "Searching for opencode in npm global directory..."
+            find $(npm prefix -g) -name "opencode" -type f 2>/dev/null || echo "No opencode executable found"
+          fi
 
       - name: Verify Claude API key
         id: verify-claude
