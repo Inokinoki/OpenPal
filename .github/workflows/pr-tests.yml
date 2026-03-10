@@ -9,17 +9,6 @@ on:
 permissions:
   contents: read  # No write permissions
 
-name: PR Tests
-
-# PR Tests - Safe for untrusted PRs (NO API keys used)
-on:
-  pull_request:
-    branches: [ main, develop ]
-  workflow_dispatch:
-
-permissions:
-  contents: read  # No write permissions
-
 jobs:
   # Unit tests - Linux (Ubuntu)
   unit-tests-linux:

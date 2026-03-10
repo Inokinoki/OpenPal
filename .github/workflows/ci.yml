@@ -4,7 +4,8 @@ on:
   push:
     branches: [ main ]
   pull_request:
-    branches: [ main ]
+    branches: [ main ]  # Run integration tests on PRs to main
+  workflow_dispatch:
 
 jobs:
   # 完整 CI 流程（使用 Makefile）
@@ -182,7 +183,7 @@ jobs:
 
   # 集成测试（使用 Makefile）
   integration-tests:
-    name: Integration Tests (Secure)
+    name: Integration Tests
     runs-on: ubuntu-latest
     # Use protected environment for security
     environment: integration-tests
@@ -193,8 +194,8 @@ jobs:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      GITHUB_COPILOT_TOKEN: ${{ secrets.GITHUB_COPILOT_TOKEN }}
-      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -210,17 +211,114 @@ jobs:
           mkdir -p /tmp/workspace
           mkdir -p /tmp/pal-broker-sessions
 
+      - name: Install Codex CLI
+        run: |
+          echo "Installing Codex CLI..."
+          npm install -g @openai/codex || echo "Codex CLI installation failed"
+
+      - name: Install Claude Code CLI
+        run: |
+          echo "Installing Claude Code CLI..."
+          npm install -g @anthropic-ai/claude-code || echo "Claude CLI installation failed"
+          export PATH="$HOME/.local/bin:$PATH"
+
+      - name: Install GitHub Copilot CLI
+        run: |
+          echo "Installing GitHub Copilot CLI..."
+          npm install -g @github/copilot
+
+      - name: Install Gemini CLI
+        run: |
+          echo "Installing Gemini CLI..."
+          npm install -g @google/gemini-cli || echo "Gemini CLI installation failed"
+
+      - name: Install OpenCode CLI
+        run: |
+          echo "Installing OpenCode CLI..."
+          npm i -g opencode-ai
+          export PATH="$(npm prefix -g)/bin:$PATH"
+          opencode --version || echo "opencode CLI installed"
+
+      - name: Verify CLI installations
+        run: |
+          echo "Verifying CLI installations..."
+          export PATH="$HOME/.local/bin:$(npm prefix -g)/bin:$PATH"
+
+          echo "Claude CLI: $(which claude || echo 'not found')"
+          echo "Codex CLI: $(which codex || echo 'not found')"
+          echo "OpenAI CLI: $(which openai || echo 'not found')"
+          echo "Copilot CLI: $(which copilot || echo 'not found')"
+          echo "Gemini CLI: $(which gemini || echo 'not found')"
+          echo "OpenCode CLI: $(which opencode || echo 'not found')"
+
+          # Test basic functionality
+          echo ""
+          echo "Testing CLI availability..."
+          command -v claude && echo "✓ claude available" || echo "✗ claude not available (will skip tests)"
+          command -v codex && echo "✓ codex available" || echo "✗ codex not available (will skip tests)"
+          command -v openai && echo "✓ openai available" || echo "✗ openai not available"
+          command -v copilot && echo "✓ copilot available" || echo "✗ copilot not available (will skip tests)"
+          command -v gemini && echo "✓ gemini available" || echo "✗ gemini not available (will skip tests)"
+          command -v opencode && echo "✓ opencode available" || echo "✗ opencode not available (will skip tests)"
+
+          echo ""
+          echo "Real CLIs will use configured API keys from environment"
+
+      - name: Build pal-broker
+        run: |
+          echo "Building pal-broker..."
+          go build -o pal-broker ./cmd/pal-broker
+          chmod +x pal-broker
+          export PATH="$PWD:$PATH"
+          echo "pal-broker built and added to PATH"
+
+      - name: Configure Codex CLI
+        if: env.OPENAI_API_KEY != ''
+        run: |
+          echo "Configuring Codex CLI..."
+          # Set up Codex with OpenAI API key
+          export OPENAI_API_KEY="$OPENAI_API_KEY"
+          # Test basic Codex command to verify configuration
+          codex --version || echo "Codex version check failed"
+
+      - name: Configure Copilot CLI
+        if: env.GITHUB_TOKEN != ''
+        run: |
+          echo "Configuring Copilot CLI..."
+          # Copilot reads GITHUB_TOKEN from environment automatically
+          export GITHUB_TOKEN="$GITHUB_TOKEN"
+          # Test basic Copilot command to verify configuration
+          copilot --version || echo "Copilot version check failed"
+
+      - name: Configure Copilot CLI
+        if: env.GITHUB_TOKEN != ''
+        run: |
+          echo "Configuring Copilot CLI..."
+          # Copilot reads GITHUB_TOKEN from environment automatically
+          echo "Copilot will use GITHUB_TOKEN from environment"
+
       - name: Run integration tests
         run: |
           echo "Running integration tests..."
+          export PATH="$PWD:$PATH:$HOME/.local/bin:$(npm prefix -g)/bin"
           echo "Available API keys:"
           [ -n "$ANTHROPIC_API_KEY" ] && echo "✓ ANTHROPIC_API_KEY" || echo "✗ ANTHROPIC_API_KEY"
           [ -n "$CLAUDE_API_KEY" ] && echo "✓ CLAUDE_API_KEY" || echo "✗ CLAUDE_API_KEY"
           [ -n "$GEMINI_API_KEY" ] && echo "✓ GEMINI_API_KEY" || echo "✗ GEMINI_API_KEY"
           [ -n "$GOOGLE_API_KEY" ] && echo "✓ GOOGLE_API_KEY" || echo "✗ GOOGLE_API_KEY"
           [ -n "$GITHUB_TOKEN" ] && echo "✓ GITHUB_TOKEN" || echo "✗ GITHUB_TOKEN"
-          [ -n "$GITHUB_COPILOT_TOKEN" ] && echo "✓ GITHUB_COPILOT_TOKEN" || echo "✗ GITHUB_COPILOT_TOKEN"
-          [ -n "$CODEX_API_KEY" ] && echo "✓ CODEX_API_KEY" || echo "✗ CODEX_API_KEY"
+          [ -n "$COPILOT_GITHUB_TOKEN" ] && echo "✓ COPILOT_GITHUB_TOKEN" || echo "✗ COPILOT_GITHUB_TOKEN"
+          [ -n "$OPENAI_API_KEY" ] && echo "✓ OPENAI_API_KEY" || echo "✗ OPENAI_API_KEY"
+          echo ""
+          echo "Checking pal-broker in PATH:"
+          which pal-broker || echo "pal-broker not found"
+          echo ""
+          echo "Checking for npm-installed CLIs:"
+          which opencode && echo "✓ opencode found" || echo "✗ opencode not found"
+          which claude && echo "✓ claude found" || echo "✗ claude not found"
+          which codex && echo "✓ codex found" || echo "✗ codex not found"
+          which copilot && echo "✓ copilot found" || echo "✗ copilot not found"
+          which gemini && echo "✓ gemini found" || echo "✗ gemini not found"
           echo ""
           go test -tags=integration -v ./tests/integration/...
 
@@ -233,39 +331,3 @@ jobs:
             test-results/
             *.log
           retention-days: 7
-
-  # CI 总结
-  summary:
-    name: CI Summary
-    runs-on: ubuntu-latest
-    needs: [ci-pipeline, cross-platform-build, code-quality, integration-tests, test-macos, test-windows]
-    if: always()
-    steps:
-      - name: Generate summary
-        run: |
-          echo "## 📊 CI Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Job Status" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| CI Pipeline | ${{ needs.ci-pipeline.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Cross-Platform Build | ${{ needs.cross-platform-build.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Code Quality | ${{ needs.code-quality.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Integration Tests | ${{ needs.integration-tests.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🌍 Cross-Platform Tests" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Platform | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|----------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Linux 🐧 | ${{ needs.ci-pipeline.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| macOS 🍎 | ${{ needs.test-macos.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Windows 🪟 | ${{ needs.test-windows.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          if [ "${{ needs.ci-pipeline.result }}" == "success" ] && \
-             [ "${{ needs.cross-platform-build.result }}" == "success" ]; then
-            echo "✅ All critical checks passed!" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "⚠️ Some checks failed or were skipped" >> $GITHUB_STEP_SUMMARY
-          fi

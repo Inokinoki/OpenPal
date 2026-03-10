@@ -54,8 +54,8 @@ jobs:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      GITHUB_COPILOT_TOKEN: ${{ secrets.GITHUB_COPILOT_TOKEN }}
-      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
       # Test configuration
       PAL_PROVIDER: claude
@@ -76,58 +76,140 @@ jobs:
       - name: Create workspace directory
         run: mkdir -p $PAL_WORK_DIR $PAL_SESSION_DIR
 
-      - name: Create mock CLIs for CI testing
+      - name: Install Claude Code CLI
         run: |
-          # Create mock CLIs to allow tests to run without real installations
-          mkdir -p /tmp/mock-clis
+          echo "Installing Claude Code CLI..."
+          curl -fsSL https://cdn.jsdelivr.net/npm/@anthropic-ai/claude-code@latest/dist/install.sh | sh
+          claude --version || echo "Claude CLI installed"
 
-          # Create mock claude CLI
-          cat > /tmp/mock-clis/claude << 'EOF'
-          #!/bin/bash
-          echo "Mock Claude CLI for CI testing"
-          echo '{"type":"result","result":"Mock response from Claude"}'
-          EOF
-          chmod +x /tmp/mock-clis/claude
+      - name: Install OpenAI CLI (for Codex)
+        run: |
+          echo "Installing OpenAI CLI..."
+          npm install -g @openai/openai-cli
+          export PATH="$(npm prefix -g)/bin:$PATH"
 
-          # Create mock pal-broker (for tests that check if binary exists)
-          cat > /tmp/mock-clis/pal-broker << 'EOF'
-          #!/bin/bash
-          echo "Mock pal-broker for CI testing"
-          EOF
-          chmod +x /tmp/mock-clis/pal-broker
+          # Create symlink for codex command compatibility
+          if command -v openai &> /dev/null; then
+            sudo ln -sf $(which openai) /usr/local/bin/codex || echo "Could not create codex symlink"
+          fi
 
-          # Add mock CLIs to PATH
-          export PATH="/tmp/mock-clis:$PATH"
+          openai --version || echo "openai CLI installed"
 
-          echo "Mock CLIs created and added to PATH"
+      - name: Install GitHub Copilot CLI
+        run: |
+          echo "Installing GitHub Copilot CLI..."
+          npm install -g @github-copilot-cli/cli
+          export PATH="$(npm prefix -g)/bin:$PATH"
+          copilot --version || echo "copilot CLI installed"
+
+      - name: Install Google Gemini CLI (gemini-cli)
+        run: |
+          echo "Installing Gemini CLI..."
+          npm install -g gemini-cli
+          export PATH="$(npm prefix -g)/bin:$PATH"
+          gemini --version || echo "gemini CLI installed"
+
+      - name: Install OpenCode CLI
+        run: |
+          echo "Installing OpenCode CLI..."
+          npm i -g opencode-ai
+          echo "npm prefix -g: $(npm prefix -g)"
+          echo "Adding npm global bin to PATH..."
+          export PATH="$(npm prefix -g)/bin:$PATH"
+          echo "PATH: $PATH"
+          which opencode || echo "opencode not found in PATH"
+          opencode --version
+
+      - name: Verify CLI installations
+        run: |
+          echo "Verifying CLI installations..."
+          export PATH="$(npm prefix -g)/bin:$PATH"
+          echo "Claude CLI:"
+          which claude || echo "claude not found"
+          echo "Codex CLI (or symlink):"
+          which codex || echo "codex not found"
+          echo "OpenAI CLI:"
+          which openai || echo "openai not found"
+          echo "Copilot CLI:"
+          which copilot || echo "copilot not found"
+          echo "Gemini CLI:"
+          which gemini || echo "gemini not found"
+          echo "OpenCode CLI:"
+          which opencode || echo "opencode not found"
+
+          echo ""
+          echo "Listing all available CLI commands:"
+          ls -la /usr/local/bin/ | grep -E "(claude|codex|copilot|gemini|opencode)" || echo "No matching CLIs found"
+
+          echo ""
+          echo "Testing OpenCode CLI specifically:"
+          if command -v opencode &> /dev/null; then
+            echo "✓ opencode found at: $(which opencode)"
+            opencode --version || echo "Could not get opencode version"
+          else
+            echo "✗ opencode not found"
+            echo "Searching for opencode in npm global directory..."
+            find $(npm prefix -g) -name "opencode" -type f 2>/dev/null || echo "No opencode executable found"
+          fi
+
+      - name: Verify Claude API key
+        id: verify-claude
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$CLAUDE_API_KEY" ]; then
+            echo "❌ ERROR: Claude API key not configured"
+            echo "Please add ANTHROPIC_API_KEY or CLAUDE_API_KEY to integration-tests environment"
+            exit 1
+          fi
+          echo "✅ Claude API key configured"
 
       - name: Test with Claude
-        if: ${{ env.ANTHROPIC_API_KEY != '' || env.CLAUDE_API_KEY != '' }}
+        if: success()
         run: |
           echo "Testing Claude Code integration..."
-          go test -tags=integration -run TestClaude -v ./tests/integration/... || echo "Some Claude tests skipped (expected in CI)"
-        continue-on-error: true
+          export PATH="$(npm prefix -g)/bin:$PATH"
+          go test -tags=integration -run TestClaude -v ./tests/integration/...
+
+      - name: Verify Codex API key
+        id: verify-codex
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "❌ ERROR: Codex API key not configured"
+            echo "Please add OPENAI_API_KEY to integration-tests environment"
+            exit 1
+          fi
+          echo "✅ Codex API key configured"
 
       - name: Test with Codex
-        if: ${{ env.CODEX_API_KEY != '' }}
+        if: success()
         run: |
           echo "Testing Codex integration..."
-          go test -tags=integration -run TestCodex -v ./tests/integration/... || echo "Some Codex tests skipped (expected in CI)"
-        continue-on-error: true
+          export PATH="$(npm prefix -g)/bin:$PATH"
+          go test -tags=integration -run TestCodex -v ./tests/integration/...
 
       - name: Test with Gemini
         if: ${{ env.GEMINI_API_KEY != '' || env.GOOGLE_API_KEY != '' }}
         run: |
           echo "Testing Gemini integration..."
+          export PATH="$(npm prefix -g)/bin:$PATH"
           go test -tags=integration -run TestGemini -v ./tests/integration/... || echo "Some Gemini tests skipped (expected in CI)"
         continue-on-error: true
 
+      - name: Verify Copilot API key
+        id: verify-copilot
+        run: |
+          if [ -z "$GITHUB_TOKEN" ] && [ -z "$COPILOT_GITHUB_TOKEN" ]; then
+            echo "❌ ERROR: GitHub/Copilot API key not configured"
+            echo "Please add GITHUB_TOKEN or COPILOT_GITHUB_TOKEN to integration-tests environment"
+            exit 1
+          fi
+          echo "✅ Copilot API key configured"
+
       - name: Test with Copilot
-        if: ${{ env.GITHUB_TOKEN != '' || env.GITHUB_COPILOT_TOKEN != '' }}
+        if: success()
         run: |
           echo "Testing Copilot integration..."
-          go test -tags=integration -run TestCopilot -v ./tests/integration/... || echo "Some Copilot tests skipped (expected in CI)"
-        continue-on-error: true
+          export PATH="$(npm prefix -g)/bin:$PATH"
+          go test -tags=integration -run TestCopilot -v ./tests/integration/...
 
       - name: Upload integration test results
         if: always()
@@ -162,6 +244,12 @@ jobs:
             echo "✅ Integration tests passed!" >> $GITHUB_STEP_SUMMARY
           else
             echo "⚠️ Integration tests failed or skipped" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 🔑 Required API Keys" >> $GITHUB_STEP_SUMMARY
+            echo "- **Claude**: ANTHROPIC_API_KEY or CLAUDE_API_KEY ❌ Required" >> $GITHUB_STEP_SUMMARY
+            echo "- **Codex**: OPENAI_API_KEY ❌ Required" >> $GITHUB_STEP_SUMMARY
+            echo "- **Copilot**: GITHUB_TOKEN or COPILOT_GITHUB_TOKEN ❌ Required" >> $GITHUB_STEP_SUMMARY
+            echo "- **Gemini**: GEMINI_API_KEY or GOOGLE_API_KEY ⚠️ Optional" >> $GITHUB_STEP_SUMMARY
           fi
 
           echo "" >> $GITHUB_STEP_SUMMARY

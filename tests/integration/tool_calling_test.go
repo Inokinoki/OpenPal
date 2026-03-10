@@ -137,7 +137,7 @@ func TestGemini_ToolCalling(t *testing.T) {
 func TestCopilot_ToolCalling(t *testing.T) {
 	skipIfNoCLI(t, "copilot")
 
-	if !hasAPIKey(t, "GITHUB_TOKEN", "GITHUB_COPILOT_TOKEN") {
+	if !hasAPIKey(t, "GITHUB_TOKEN", "COPILOT_GITHUB_TOKEN") {
 		t.Skip("Skipping: No GitHub Copilot token found")
 	}
 
@@ -241,7 +241,7 @@ func TestAllAdapters_ToolCalling(t *testing.T) {
 		{"Claude", "claude", []string{"ANTHROPIC_API_KEY", "CLAUDE_API_KEY"}},
 		{"Codex", "codex", []string{}},
 		{"Gemini", "gemini", []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"}},
-		{"Copilot", "copilot", []string{"GITHUB_TOKEN", "GITHUB_COPILOT_TOKEN"}},
+		{"Copilot", "copilot", []string{"GITHUB_TOKEN", "COPILOT_GITHUB_TOKEN"}},
 		{"OpenCode", "opencode", []string{}},
 	}
 
