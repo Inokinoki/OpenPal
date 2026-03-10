@@ -255,9 +255,32 @@ jobs:
           echo ""
           echo "Real CLIs will use configured API keys from environment"
 
+      - name: Build pal-broker
+        run: |
+          echo "Building pal-broker..."
+          go build -o pal-broker ./cmd/pal-broker
+          chmod +x pal-broker
+          export PATH="$PWD:$PATH"
+          echo "pal-broker built and added to PATH"
+
+      - name: Configure Codex CLI
+        if: env.OPENAI_API_KEY != ''
+        run: |
+          echo "Configuring Codex CLI..."
+          # Codex reads OPENAI_API_KEY from environment automatically
+          echo "Codex will use OPENAI_API_KEY from environment"
+
+      - name: Configure Copilot CLI
+        if: env.GITHUB_TOKEN != ''
+        run: |
+          echo "Configuring Copilot CLI..."
+          # Copilot reads GITHUB_TOKEN from environment automatically
+          echo "Copilot will use GITHUB_TOKEN from environment"
+
       - name: Run integration tests
         run: |
           echo "Running integration tests..."
+          export PATH="$PWD:$PATH:$HOME/.local/bin"
           echo "Available API keys:"
           [ -n "$ANTHROPIC_API_KEY" ] && echo "✓ ANTHROPIC_API_KEY" || echo "✗ ANTHROPIC_API_KEY"
           [ -n "$CLAUDE_API_KEY" ] && echo "✓ CLAUDE_API_KEY" || echo "✗ CLAUDE_API_KEY"
@@ -266,6 +289,9 @@ jobs:
           [ -n "$GITHUB_TOKEN" ] && echo "✓ GITHUB_TOKEN" || echo "✗ GITHUB_TOKEN"
           [ -n "$COPILOT_GITHUB_TOKEN" ] && echo "✓ COPILOT_GITHUB_TOKEN" || echo "✗ COPILOT_GITHUB_TOKEN"
           [ -n "$OPENAI_API_KEY" ] && echo "✓ OPENAI_API_KEY" || echo "✗ OPENAI_API_KEY"
+          echo ""
+          echo "Checking pal-broker in PATH:"
+          which pal-broker || echo "pal-broker not found"
           echo ""
           go test -tags=integration -v ./tests/integration/...
 

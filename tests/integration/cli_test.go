@@ -69,7 +69,6 @@ func TestClaudeCode_Integration(t *testing.T) {
 func TestCodex_Integration(t *testing.T) {
 	skipIfNoCLI(t, "codex")
 
-	// Codex usually requires login
 	t.Log("Testing Codex CLI...")
 
 	tmpDir := t.TempDir()
@@ -80,7 +79,10 @@ func TestCodex_Integration(t *testing.T) {
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		// Codex may need login, skip instead of fail
+		// In CI, fail if Codex is not configured
+		if os.Getenv("CI") != "" {
+			t.Fatalf("Codex not configured in CI: %v\nOutput: %s", err, string(output))
+		}
 		t.Skipf("Codex not configured: %v", err)
 	}
 
@@ -110,10 +112,17 @@ func TestCopilot_Integration(t *testing.T) {
 	select {
 	case err := <-done:
 		if err != nil {
+			// In CI, fail if Copilot is not configured
+			if os.Getenv("CI") != "" {
+				t.Fatalf("Copilot not configured in CI: %v", err)
+			}
 			t.Skipf("Copilot not configured: %v", err)
 		}
 	case <-time.After(30 * time.Second):
 		cmd.Process.Kill()
+		if os.Getenv("CI") != "" {
+			t.Fatal("Copilot timed out in CI")
+		}
 		t.Skip("Copilot timed out")
 	}
 }
