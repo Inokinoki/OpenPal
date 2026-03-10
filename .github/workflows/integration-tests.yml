@@ -109,7 +109,7 @@ jobs:
       - name: Install OpenCode CLI
         run: |
           echo "Installing OpenCode CLI..."
-          npm install -g opencode-cli || echo "OpenCode CLI installation failed, continuing..."
+          npm i -g opencode-ai || echo "OpenCode CLI installation failed, continuing..."
           opencode --version || echo "opencode CLI installed"
 
       - name: Verify CLI installations
