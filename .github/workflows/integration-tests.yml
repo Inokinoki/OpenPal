@@ -92,7 +92,7 @@ jobs:
       - name: Install GitHub Copilot CLI
         run: |
           echo "Installing GitHub Copilot CLI..."
-          npm install -g @github-copilot-cli/cli
+          npm install -g @github-copilot-cli
           export PATH="$(npm prefix -g)/bin:$PATH"
           copilot --version || echo "copilot CLI installed"
 
