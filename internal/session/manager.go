@@ -20,7 +20,7 @@ type SessionData struct {
 
 // Manager - Session manager for a specific task
 type Manager struct {
-	sessionDir  string // /tmp/pal-broker/{taskID}/
+	sessionDir  string // /tmp/openpal/{taskID}/
 	provider    string // claude, copilot, codex, etc.
 	taskID      string
 	sessionFile string // Full path to session file

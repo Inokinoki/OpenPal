@@ -15,8 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"pal-broker/internal/session"
-	"pal-broker/internal/util"
+	"openpal/internal/session"
+	"openpal/internal/util"
 )
 
 // CLIConfig - CLI configuration

@@ -20,9 +20,9 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"pal-broker/internal/adapter"
-	"pal-broker/internal/state"
-	"pal-broker/internal/util"
+	"openpal/internal/adapter"
+	"openpal/internal/state"
+	"openpal/internal/util"
 )
 
 const (
@@ -1798,70 +1798,70 @@ var metricsNumBufPool = sync.Pool{
 // metricsHeadersStatic - Pre-built HELP+TYPE headers as single concatenated string
 // Optimized 2026-02-24: Eliminates map lookup overhead entirely, single string write
 // All metric headers are static - concatenate once at startup, write as single block
-const metricsHeadersStatic = `# HELP pal_broker_uptime_seconds Server uptime in seconds
-# TYPE pal_broker_uptime_seconds gauge
-# HELP pal_broker_info Server information
-# TYPE pal_broker_info gauge
-# HELP pal_broker_connections_current Current number of connected clients
-# TYPE pal_broker_connections_current gauge
-# HELP pal_broker_connections_total Total number of connections since start
-# TYPE pal_broker_connections_total counter
-# HELP pal_broker_disconnections_total Total number of disconnections since start
-# TYPE pal_broker_disconnections_total counter
-# HELP pal_broker_connections_peak Peak number of concurrent connections
-# TYPE pal_broker_connections_peak gauge
-# HELP pal_broker_memory_alloc_bytes Current memory allocation in bytes
-# TYPE pal_broker_memory_alloc_bytes gauge
-# HELP pal_broker_memory_sys_bytes Total memory in bytes
-# TYPE pal_broker_memory_sys_bytes gauge
-# HELP pal_broker_gc_num Total number of GC cycles
-# TYPE pal_broker_gc_num counter
-# HELP pal_broker_gc_pause_total_seconds Total GC pause time in seconds
-# TYPE pal_broker_gc_pause_total_seconds counter
-# HELP pal_broker_cache_hits_total Total cache hits
-# TYPE pal_broker_cache_hits_total counter
-# HELP pal_broker_cache_misses_total Total cache misses
-# TYPE pal_broker_cache_misses_total counter
-# HELP pal_broker_cache_evictions_total Total cache evictions
-# TYPE pal_broker_cache_evictions_total counter
-# HELP pal_broker_cache_hit_rate Cache hit rate (0-100)
-# TYPE pal_broker_cache_hit_rate gauge
-# HELP pal_broker_cache_updates_total Total cache update operations
-# TYPE pal_broker_cache_updates_total counter
-# HELP pal_broker_cache_size Current number of cached tasks
-# TYPE pal_broker_cache_size gauge
-# HELP pal_broker_cache_avg_events_per_cache Average events per cached task
-# TYPE pal_broker_cache_avg_events_per_cache gauge
-# HELP pal_broker_cache_memory_estimate_kb Estimated cache memory usage in KB
-# TYPE pal_broker_cache_memory_estimate_kb gauge
-# HELP pal_broker_cache_total_events Total events across all caches
-# TYPE pal_broker_cache_total_events gauge
-# HELP pal_broker_input_queue_depth Current input queue depth
-# TYPE pal_broker_input_queue_depth gauge
-# HELP pal_broker_broadcast_queue_depth Current broadcast queue depth
-# TYPE pal_broker_broadcast_queue_depth gauge
-# HELP pal_broker_cli_pid CLI process ID (0 if not running)
-# TYPE pal_broker_cli_pid gauge
-# HELP pal_broker_connections_rate_limited_total Total connections rejected due to rate limiting
-# TYPE pal_broker_connections_rate_limited_total counter
-# HELP pal_broker_broadcast_events_dropped_total Total broadcast events dropped due to queue overflow
-# TYPE pal_broker_broadcast_events_dropped_total counter
-# HELP pal_broker_input_messages_dropped_total Total input messages dropped due to queue overflow
-# TYPE pal_broker_input_messages_dropped_total counter
-# HELP pal_broker_max_clients Maximum allowed concurrent clients (0 = unlimited)
-# TYPE pal_broker_max_clients gauge
+const metricsHeadersStatic = `# HELP openpal_uptime_seconds Server uptime in seconds
+# TYPE openpal_uptime_seconds gauge
+# HELP openpal_info Server information
+# TYPE openpal_info gauge
+# HELP openpal_connections_current Current number of connected clients
+# TYPE openpal_connections_current gauge
+# HELP openpal_connections_total Total number of connections since start
+# TYPE openpal_connections_total counter
+# HELP openpal_disconnections_total Total number of disconnections since start
+# TYPE openpal_disconnections_total counter
+# HELP openpal_connections_peak Peak number of concurrent connections
+# TYPE openpal_connections_peak gauge
+# HELP openpal_memory_alloc_bytes Current memory allocation in bytes
+# TYPE openpal_memory_alloc_bytes gauge
+# HELP openpal_memory_sys_bytes Total memory in bytes
+# TYPE openpal_memory_sys_bytes gauge
+# HELP openpal_gc_num Total number of GC cycles
+# TYPE openpal_gc_num counter
+# HELP openpal_gc_pause_total_seconds Total GC pause time in seconds
+# TYPE openpal_gc_pause_total_seconds counter
+# HELP openpal_cache_hits_total Total cache hits
+# TYPE openpal_cache_hits_total counter
+# HELP openpal_cache_misses_total Total cache misses
+# TYPE openpal_cache_misses_total counter
+# HELP openpal_cache_evictions_total Total cache evictions
+# TYPE openpal_cache_evictions_total counter
+# HELP openpal_cache_hit_rate Cache hit rate (0-100)
+# TYPE openpal_cache_hit_rate gauge
+# HELP openpal_cache_updates_total Total cache update operations
+# TYPE openpal_cache_updates_total counter
+# HELP openpal_cache_size Current number of cached tasks
+# TYPE openpal_cache_size gauge
+# HELP openpal_cache_avg_events_per_cache Average events per cached task
+# TYPE openpal_cache_avg_events_per_cache gauge
+# HELP openpal_cache_memory_estimate_kb Estimated cache memory usage in KB
+# TYPE openpal_cache_memory_estimate_kb gauge
+# HELP openpal_cache_total_events Total events across all caches
+# TYPE openpal_cache_total_events gauge
+# HELP openpal_input_queue_depth Current input queue depth
+# TYPE openpal_input_queue_depth gauge
+# HELP openpal_broadcast_queue_depth Current broadcast queue depth
+# TYPE openpal_broadcast_queue_depth gauge
+# HELP openpal_cli_pid CLI process ID (0 if not running)
+# TYPE openpal_cli_pid gauge
+# HELP openpal_connections_rate_limited_total Total connections rejected due to rate limiting
+# TYPE openpal_connections_rate_limited_total counter
+# HELP openpal_broadcast_events_dropped_total Total broadcast events dropped due to queue overflow
+# TYPE openpal_broadcast_events_dropped_total counter
+# HELP openpal_input_messages_dropped_total Total input messages dropped due to queue overflow
+# TYPE openpal_input_messages_dropped_total counter
+# HELP openpal_max_clients Maximum allowed concurrent clients (0 = unlimited)
+# TYPE openpal_max_clients gauge
 `
 
 // metricsHeadersDynamic - Pre-built headers for optional/dynamic metrics
 // These are written conditionally based on configuration
 const (
-	metricsHeadersBroadcastRateLimit = `# HELP pal_broker_broadcast_rate_limit Broadcast rate limit (events per second)
-# TYPE pal_broker_broadcast_rate_limit gauge
-# HELP pal_broker_last_broadcast_timestamp Last broadcast timestamp (Unix nanoseconds)
-# TYPE pal_broker_last_broadcast_timestamp gauge
+	metricsHeadersBroadcastRateLimit = `# HELP openpal_broadcast_rate_limit Broadcast rate limit (events per second)
+# TYPE openpal_broadcast_rate_limit gauge
+# HELP openpal_last_broadcast_timestamp Last broadcast timestamp (Unix nanoseconds)
+# TYPE openpal_last_broadcast_timestamp gauge
 `
-	metricsHeadersConnectionRateLimit = `# HELP pal_broker_connection_rate_limit Connection rate limit (connections per second)
-# TYPE pal_broker_connection_rate_limit gauge
+	metricsHeadersConnectionRateLimit = `# HELP openpal_connection_rate_limit Connection rate limit (connections per second)
+# TYPE openpal_connection_rate_limit gauge
 `
 )
 
@@ -1949,63 +1949,63 @@ func (s *WebSocketServer) handleMetrics(w http.ResponseWriter, r *http.Request) 
 
 	// Server metrics (static headers - single string write)
 	sb.WriteString(metricsHeadersStatic)
-	writeFloat("pal_broker_uptime_seconds", uptimeSecs)
-	writeInfo("pal_broker_info", 1)
+	writeFloat("openpal_uptime_seconds", uptimeSecs)
+	writeInfo("openpal_info", 1)
 
 	// Connection metrics
-	writeInt("pal_broker_connections_current", currentConns)
-	writeInt("pal_broker_connections_total", totalConns)
-	writeInt("pal_broker_disconnections_total", totalDisconns)
-	writeInt("pal_broker_connections_peak", peakConns)
+	writeInt("openpal_connections_current", currentConns)
+	writeInt("openpal_connections_total", totalConns)
+	writeInt("openpal_disconnections_total", totalDisconns)
+	writeInt("openpal_connections_peak", peakConns)
 
 	// Memory metrics
-	writeInt("pal_broker_memory_alloc_bytes", int64(memStats.Alloc))
-	writeInt("pal_broker_memory_sys_bytes", int64(memStats.Sys))
-	writeInt("pal_broker_gc_num", int64(memStats.NumGC))
-	writeFloat("pal_broker_gc_pause_total_seconds", gcPauseSecs)
+	writeInt("openpal_memory_alloc_bytes", int64(memStats.Alloc))
+	writeInt("openpal_memory_sys_bytes", int64(memStats.Sys))
+	writeInt("openpal_gc_num", int64(memStats.NumGC))
+	writeFloat("openpal_gc_pause_total_seconds", gcPauseSecs)
 
 	// Cache metrics
-	writeInt("pal_broker_cache_hits_total", cacheHits)
-	writeInt("pal_broker_cache_misses_total", cacheMisses)
-	writeInt("pal_broker_cache_evictions_total", cacheEvictions)
-	writeFloat("pal_broker_cache_hit_rate", cacheHitRate)
-	writeInt("pal_broker_cache_updates_total", cacheUpdates)
-	writeInt("pal_broker_cache_size", cacheSize)
-	writeFloat("pal_broker_cache_avg_events_per_cache", avgEventsPerCache)
-	writeInt("pal_broker_cache_memory_estimate_kb", int64(memoryEstimateKB))
-	writeInt("pal_broker_cache_total_events", int64(totalEvents))
+	writeInt("openpal_cache_hits_total", cacheHits)
+	writeInt("openpal_cache_misses_total", cacheMisses)
+	writeInt("openpal_cache_evictions_total", cacheEvictions)
+	writeFloat("openpal_cache_hit_rate", cacheHitRate)
+	writeInt("openpal_cache_updates_total", cacheUpdates)
+	writeInt("openpal_cache_size", cacheSize)
+	writeFloat("openpal_cache_avg_events_per_cache", avgEventsPerCache)
+	writeInt("openpal_cache_memory_estimate_kb", int64(memoryEstimateKB))
+	writeInt("openpal_cache_total_events", int64(totalEvents))
 
 	// Queue metrics
-	writeInt("pal_broker_input_queue_depth", int64(inputQueueDepth))
-	writeInt("pal_broker_broadcast_queue_depth", int64(len(s.broadcastCh)))
+	writeInt("openpal_input_queue_depth", int64(inputQueueDepth))
+	writeInt("openpal_broadcast_queue_depth", int64(len(s.broadcastCh)))
 
 	// Queue overflow metrics (dropped events/messages)
-	writeInt("pal_broker_broadcast_events_dropped_total", atomic.LoadInt64(&s.stats.broadcastDropped))
-	writeInt("pal_broker_input_messages_dropped_total", atomic.LoadInt64(&s.stats.inputDropped))
+	writeInt("openpal_broadcast_events_dropped_total", atomic.LoadInt64(&s.stats.broadcastDropped))
+	writeInt("openpal_input_messages_dropped_total", atomic.LoadInt64(&s.stats.inputDropped))
 
 	// Max clients limit
-	writeInt("pal_broker_max_clients", s.maxClients)
+	writeInt("openpal_max_clients", s.maxClients)
 
 	// Broadcast rate limit metrics (conditional)
 	if s.broadcastRateLimit > 0 {
 		sb.WriteString(metricsHeadersBroadcastRateLimit)
-		writeInt("pal_broker_broadcast_rate_limit", s.broadcastRateLimit)
+		writeInt("openpal_broadcast_rate_limit", s.broadcastRateLimit)
 		lastBroadcast := atomic.LoadInt64(&s.lastBroadcast)
 		if lastBroadcast > 0 {
-			writeInt("pal_broker_last_broadcast_timestamp", lastBroadcast)
+			writeInt("openpal_last_broadcast_timestamp", lastBroadcast)
 		}
 	}
 
 	// Connection rate limit metrics (always expose rate_limited counter)
 	rateLimited := atomic.LoadInt64(&s.stats.rateLimitedConnections)
-	writeInt("pal_broker_connections_rate_limited_total", rateLimited)
+	writeInt("openpal_connections_rate_limited_total", rateLimited)
 	if s.connRateLimit.enabled {
 		sb.WriteString(metricsHeadersConnectionRateLimit)
-		writeInt("pal_broker_connection_rate_limit", s.connRateLimit.maxPerSecond)
+		writeInt("openpal_connection_rate_limit", s.connRateLimit.maxPerSecond)
 	}
 
 	// CLI metrics
-	writeInt("pal_broker_cli_pid", int64(cliPID))
+	writeInt("openpal_cli_pid", int64(cliPID))
 
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	w.Write([]byte(sb.String()))

@@ -15,7 +15,7 @@ type AgentStatus struct {
 	State         string   `json:"state"`        // running, completed, failed, stopped
 	Provider      string   `json:"provider"`     // claude, codex, copilot
 	QuestID       string   `json:"quest_id"`     // Quest identifier
-	PID           int      `json:"pid"`          // pal-broker PID
+	PID           int      `json:"pid"`          // openpal PID
 	CLIPID        int      `json:"cli_pid"`      // AI CLI PID
 	StartTime     int64    `json:"start_time"`   // Unix timestamp (ms)
 	UpdateTime    int64    `json:"update_time"`  // Last update time (ms)

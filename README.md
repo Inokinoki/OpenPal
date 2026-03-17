@@ -1,4 +1,4 @@
-# PalBroker
+# OpenPal
 
 WebSocket broker for AI CLI tools with session management and real-time streaming.
 
@@ -15,7 +15,7 @@ WebSocket broker for AI CLI tools with session management and real-time streamin
 ```bash
 # Clone the repository
 git clone <repository-url>
-cd PalBroker
+cd OpenPal
 
 # Build
 make build
@@ -28,13 +28,13 @@ make install
 
 ```bash
 # Basic usage
-./pal-broker --quest-id my-task --provider claude --work-dir /path/to/project
+./openpal --quest-id my-task --provider claude --work-dir /path/to/project
 
 # With specific port
-./pal-broker --quest-id my-task --provider claude --port :8080
+./openpal --quest-id my-task --provider claude --port :8080
 
 # Show version
-./pal-broker --version
+./openpal --version
 ```
 
 ## Environment Variables

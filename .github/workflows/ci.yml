@@ -38,8 +38,8 @@ jobs:
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: pal-broker-ci-pipeline
-          path: pal-broker
+          name: openpal-ci-pipeline
+          path: openpal
           retention-days: 7
 
   # Cross-platform tests
@@ -65,14 +65,14 @@ jobs:
       - name: Build binary
         run: |
           echo "Building for macOS..."
-          go build -o pal-broker-macos ./cmd/pal-broker
-          ./pal-broker-macos --version
+          go build -o openpal-macos ./cmd/openpal
+          ./openpal-macos --version
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: pal-broker-macos-amd64
-          path: pal-broker-macos
+          name: openpal-macos-amd64
+          path: openpal-macos
           retention-days: 7
 
   test-windows:
@@ -100,14 +100,14 @@ jobs:
       - name: Build binary
         run: |
           Write-Host "Building for Windows..."
-          go build -o pal-broker-windows.exe ./cmd/pal-broker
-          ./pal-broker-windows.exe --version
+          go build -o openpal-windows.exe ./cmd/openpal
+          ./openpal-windows.exe --version
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: pal-broker-windows-amd64
-          path: pal-broker-windows.exe
+          name: openpal-windows-amd64
+          path: openpal-windows.exe
           retention-days: 7
 
   # 多平台构建（使用 Makefile）
@@ -132,29 +132,29 @@ jobs:
       - name: Upload Linux amd64
         uses: actions/upload-artifact@v4
         with:
-          name: pal-broker-linux-amd64
-          path: pal-broker-linux-amd64
+          name: openpal-linux-amd64
+          path: openpal-linux-amd64
           retention-days: 7
 
       - name: Upload Linux arm64
         uses: actions/upload-artifact@v4
         with:
-          name: pal-broker-linux-arm64
-          path: pal-broker-linux-arm64
+          name: openpal-linux-arm64
+          path: openpal-linux-arm64
           retention-days: 7
 
       - name: Upload macOS amd64
         uses: actions/upload-artifact@v4
         with:
-          name: pal-broker-darwin-amd64
-          path: pal-broker-darwin-amd64
+          name: openpal-darwin-amd64
+          path: openpal-darwin-amd64
           retention-days: 7
 
       - name: Upload macOS arm64
         uses: actions/upload-artifact@v4
         with:
-          name: pal-broker-darwin-arm64
-          path: pal-broker-darwin-arm64
+          name: openpal-darwin-arm64
+          path: openpal-darwin-arm64
           retention-days: 7
 
   # 代码质量检查（使用 Makefile）
@@ -209,7 +209,7 @@ jobs:
       - name: Create test directories
         run: |
           mkdir -p /tmp/workspace
-          mkdir -p /tmp/pal-broker-sessions
+          mkdir -p /tmp/openpal-sessions
 
       - name: Install Codex CLI
         run: |
@@ -266,13 +266,13 @@ jobs:
           echo ""
           echo "Real CLIs will use configured API keys from environment"
 
-      - name: Build pal-broker
+      - name: Build openpal
         run: |
-          echo "Building pal-broker..."
-          go build -o pal-broker ./cmd/pal-broker
-          chmod +x pal-broker
+          echo "Building openpal..."
+          go build -o openpal ./cmd/openpal
+          chmod +x openpal
           export PATH="$PWD:$PATH"
-          echo "pal-broker built and added to PATH"
+          echo "openpal built and added to PATH"
 
       - name: Configure Codex CLI
         if: env.OPENAI_API_KEY != ''
@@ -312,8 +312,8 @@ jobs:
           [ -n "$COPILOT_GITHUB_TOKEN" ] && echo "✓ COPILOT_GITHUB_TOKEN" || echo "✗ COPILOT_GITHUB_TOKEN"
           [ -n "$OPENAI_API_KEY" ] && echo "✓ OPENAI_API_KEY" || echo "✗ OPENAI_API_KEY"
           echo ""
-          echo "Checking pal-broker in PATH:"
-          which pal-broker || echo "pal-broker not found"
+          echo "Checking openpal in PATH:"
+          which openpal || echo "openpal not found"
           echo ""
           echo "Checking for npm-installed CLIs:"
           which opencode && echo "✓ opencode found" || echo "✗ opencode not found"

@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"pal-broker/internal/util"
+	"openpal/internal/util"
 )
 
 // acpRequestPool - Pool for reusing ACP request maps (reduces GC pressure)
