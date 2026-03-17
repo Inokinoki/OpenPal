@@ -211,10 +211,12 @@ jobs:
           mkdir -p /tmp/workspace
           mkdir -p /tmp/pal-broker-sessions
 
-      - name: Skip Codex CLI installation
+      - name: Install Codex CLI
         run: |
-          echo "Skipping Codex CLI installation - package not available in npm"
-          echo "Tests will skip if OPENAI_API_KEY is not configured"
+          echo "Installing Codex CLI..."
+          npm install -g @openai/codex
+          export PATH="$(npm prefix -g)/bin:$PATH"
+          codex --version || echo "Codex CLI installed"
 
       - name: Install Claude Code CLI
         run: |
@@ -245,8 +247,8 @@ jobs:
           export PATH="$HOME/.local/bin:$(npm prefix -g)/bin:$PATH"
 
           echo "Claude CLI: $(which claude || echo 'not found')"
-          echo "Codex CLI: Skipped - package not available in npm"
-          echo "OpenAI CLI: Skipped - not installed"
+          echo "Codex CLI: $(which codex || echo 'not found')"
+          echo "OpenAI CLI: $(which openai || echo 'not found')"
           echo "Copilot CLI: $(which copilot || echo 'not found')"
           echo "Gemini CLI: $(which gemini || echo 'not found')"
           echo "OpenCode CLI: $(which opencode || echo 'not found')"
@@ -255,7 +257,7 @@ jobs:
           echo ""
           echo "Testing CLI availability..."
           command -v claude && echo "✓ claude available" || echo "✗ claude not available (will skip tests)"
-          echo "✓ codex tests skipped (package not available)"
+          command -v codex && echo "✓ codex available" || echo "✗ codex not available (will skip tests)"
           command -v openai && echo "✓ openai available" || echo "✗ openai not available"
           command -v copilot && echo "✓ copilot available" || echo "✗ copilot not available (will skip tests)"
           command -v gemini && echo "✓ gemini available" || echo "✗ gemini not available (will skip tests)"
@@ -272,11 +274,14 @@ jobs:
           export PATH="$PWD:$PATH"
           echo "pal-broker built and added to PATH"
 
-      - name: Skip Codex CLI configuration
+      - name: Configure Codex CLI
         if: env.OPENAI_API_KEY != ''
         run: |
-          echo "Skipping Codex CLI configuration - package not available in npm"
-          echo "Codex tests will be skipped"
+          echo "Configuring Codex CLI..."
+          # Codex reads OPENAI_API_KEY from environment automatically
+          export OPENAI_API_KEY="$OPENAI_API_KEY"
+          # Test basic Codex command to verify configuration
+          codex --version || echo "Codex version check failed"
 
       - name: Configure Copilot CLI
         if: env.GITHUB_TOKEN != ''
@@ -313,7 +318,7 @@ jobs:
           echo "Checking for npm-installed CLIs:"
           which opencode && echo "✓ opencode found" || echo "✗ opencode not found"
           which claude && echo "✓ claude found" || echo "✗ claude not found"
-          echo "✓ codex checks skipped (package not available)"
+          which codex && echo "✓ codex found" || echo "✗ codex not found"
           which copilot && echo "✓ copilot found" || echo "✗ copilot not found"
           which gemini && echo "✓ gemini found" || echo "✗ gemini not found"
           echo ""

@@ -82,10 +82,12 @@ jobs:
           curl -fsSL https://cdn.jsdelivr.net/npm/@anthropic-ai/claude-code@latest/dist/install.sh | sh
           claude --version || echo "Claude CLI installed"
 
-      - name: Skip Codex CLI installation
+      - name: Install Codex CLI
         run: |
-          echo "Skipping Codex CLI installation - package not available in npm"
-          echo "Tests will skip if OPENAI_API_KEY is not configured"
+          echo "Installing Codex CLI..."
+          npm install -g @openai/codex
+          export PATH="$(npm prefix -g)/bin:$PATH"
+          codex --version || echo "Codex CLI installed"
 
       - name: Install GitHub Copilot CLI
         run: |
@@ -119,7 +121,7 @@ jobs:
           echo "Claude CLI:"
           which claude || echo "claude not found"
           echo "Codex CLI:"
-          echo "  Skipped - package not available in npm"
+          which codex || echo "codex not found"
           echo "Copilot CLI:"
           which copilot || echo "copilot not found"
           echo "Gemini CLI:"
@@ -129,7 +131,7 @@ jobs:
 
           echo ""
           echo "Listing all available CLI commands:"
-          ls -la /usr/local/bin/ | grep -E "(claude|copilot|gemini|opencode)" || echo "No matching CLIs found"
+          ls -la /usr/local/bin/ | grep -E "(claude|codex|copilot|gemini|opencode)" || echo "No matching CLIs found"
 
           echo ""
           echo "Testing OpenCode CLI specifically:"
