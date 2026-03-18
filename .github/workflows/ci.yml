@@ -354,13 +354,13 @@ jobs:
           echo ""
           echo "Real CLIs will use configured API keys from environment"
 
-      - name: Build pal-broker
+      - name: Build openpal
         run: |
-          echo "Building pal-broker..."
-          go build -o pal-broker ./cmd/pal-broker
-          chmod +x pal-broker
+          echo "Building openpal..."
+          go build -o openpal ./cmd/openpal
+          chmod +x openpal
           export PATH="$PWD:$PATH"
-          echo "pal-broker built and added to PATH"
+          echo "openpal built and added to PATH"
 
       - name: Configure Codex CLI
         if: env.OPENAI_API_KEY != ''
