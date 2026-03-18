@@ -398,9 +398,9 @@ func TestCopilot_ACP_3TurnConversation(t *testing.T) {
 	t.Log("SUCCESS: Copilot ACP connection working - all prompts sent successfully")
 }
 
-// TestPalBroker_3TurnConversation - Test pal-broker with 3-turn conversation
-func TestPalBroker_3TurnConversation(t *testing.T) {
-	skipIfNoCLI(t, "pal-broker")
+// TestOpenPal_3TurnConversation - Test openpal with 3-turn conversation
+func TestOpenPal_3TurnConversation(t *testing.T) {
+	skipIfNoCLI(t, "openpal")
 
 	// Test with different providers
 	providers := []struct {
@@ -420,12 +420,12 @@ func TestPalBroker_3TurnConversation(t *testing.T) {
 				t.Skipf("Skipping: No API key found for %s", p.name)
 			}
 
-			t.Logf("Testing pal-broker with %s provider...", p.name)
+			t.Logf("Testing openpal with %s provider...", p.name)
 
 			tmpDir := t.TempDir()
 
-			// Start pal-broker
-			cmd := exec.Command("pal-broker",
+			// Start openpal
+			cmd := exec.Command("openpal",
 				"--task", "conversation_test",
 				"--provider", p.provider,
 				"--work-dir", tmpDir,
@@ -433,7 +433,7 @@ func TestPalBroker_3TurnConversation(t *testing.T) {
 			)
 
 			if err := cmd.Start(); err != nil {
-				t.Fatalf("Failed to start pal-broker: %v", err)
+				t.Fatalf("Failed to start openpal: %v", err)
 			}
 
 			// Wait for server to start
