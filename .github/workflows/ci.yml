@@ -299,6 +299,94 @@ jobs:
           # Copilot reads GITHUB_TOKEN from environment automatically
           echo "Copilot will use GITHUB_TOKEN from environment"
 
+      - name: Install Codex CLI
+        run: |
+          echo "Installing Codex CLI..."
+          npm install -g @openai/codex
+          export PATH="$(npm prefix -g)/bin:$PATH"
+          codex --version || echo "Codex CLI installed"
+
+      - name: Install Claude Code CLI
+        run: |
+          echo "Installing Claude Code CLI..."
+          npm install -g @anthropic-ai/claude-code || echo "Claude CLI installation failed"
+          export PATH="$HOME/.local/bin:$PATH"
+
+      - name: Install GitHub Copilot CLI
+        run: |
+          echo "Installing GitHub Copilot CLI..."
+          npm install -g @github/copilot
+
+      - name: Install Gemini CLI
+        run: |
+          echo "Installing Gemini CLI..."
+          npm install -g @google/gemini-cli || echo "Gemini CLI installation failed"
+
+      - name: Install OpenCode CLI
+        run: |
+          echo "Installing OpenCode CLI..."
+          npm i -g opencode-ai
+          export PATH="$(npm prefix -g)/bin:$PATH"
+          opencode --version || echo "opencode CLI installed"
+
+      - name: Verify CLI installations
+        run: |
+          echo "Verifying CLI installations..."
+          export PATH="$HOME/.local/bin:$(npm prefix -g)/bin:$PATH"
+
+          echo "Claude CLI: $(which claude || echo 'not found')"
+          echo "Codex CLI: $(which codex || echo 'not found')"
+          echo "OpenAI CLI: $(which openai || echo 'not found')"
+          echo "Copilot CLI: $(which copilot || echo 'not found')"
+          echo "Gemini CLI: $(which gemini || echo 'not found')"
+          echo "OpenCode CLI: $(which opencode || echo 'not found')"
+
+          # Test basic functionality
+          echo ""
+          echo "Testing CLI availability..."
+          command -v claude && echo "✓ claude available" || echo "✗ claude not available (will skip tests)"
+          command -v codex && echo "✓ codex available" || echo "✗ codex not available (will skip tests)"
+          command -v openai && echo "✓ openai available" || echo "✗ openai not available"
+          command -v copilot && echo "✓ copilot available" || echo "✗ copilot not available (will skip tests)"
+          command -v gemini && echo "✓ gemini available" || echo "✗ gemini not available (will skip tests)"
+          command -v opencode && echo "✓ opencode available" || echo "✗ opencode not available (will skip tests)"
+
+          echo ""
+          echo "Real CLIs will use configured API keys from environment"
+
+      - name: Build pal-broker
+        run: |
+          echo "Building pal-broker..."
+          go build -o pal-broker ./cmd/pal-broker
+          chmod +x pal-broker
+          export PATH="$PWD:$PATH"
+          echo "pal-broker built and added to PATH"
+
+      - name: Configure Codex CLI
+        if: env.OPENAI_API_KEY != ''
+        run: |
+          echo "Configuring Codex CLI..."
+          # Codex reads OPENAI_API_KEY from environment automatically
+          export OPENAI_API_KEY="$OPENAI_API_KEY"
+          # Test basic Codex command to verify configuration
+          codex --version || echo "Codex version check failed"
+
+      - name: Configure Copilot CLI
+        if: env.GITHUB_TOKEN != ''
+        run: |
+          echo "Configuring Copilot CLI..."
+          # Copilot reads GITHUB_TOKEN from environment automatically
+          export GITHUB_TOKEN="$GITHUB_TOKEN"
+          # Test basic Copilot command to verify configuration
+          copilot --version || echo "Copilot version check failed"
+
+      - name: Configure Copilot CLI
+        if: env.GITHUB_TOKEN != ''
+        run: |
+          echo "Configuring Copilot CLI..."
+          # Copilot reads GITHUB_TOKEN from environment automatically
+          echo "Copilot will use GITHUB_TOKEN from environment"
+
       - name: Run integration tests
         run: |
           echo "Running integration tests..."
