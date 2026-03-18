@@ -99,7 +99,7 @@ jobs:
       - name: Install Google Gemini CLI (gemini-cli)
         run: |
           echo "Installing Gemini CLI..."
-          npm install -g gemini-cli
+          npm install -g @google/gemini-cli
           export PATH="$(npm prefix -g)/bin:$PATH"
           gemini --version || echo "gemini CLI installed"
 
