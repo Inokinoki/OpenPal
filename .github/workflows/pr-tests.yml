@@ -116,15 +116,15 @@ jobs:
 
       - name: Build binary
         run: |
-          echo "Building pal-broker for Linux..."
-          go build -o pal-broker ./cmd/pal-broker
-          ./pal-broker --version
+          echo "Building openpal for Linux..."
+          go build -o openpal ./cmd/openpal
+          ./openpal --version
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: pal-broker-binary-linux
-          path: pal-broker
+          name: openpal-binary-linux
+          path: openpal
           retention-days: 7
 
   # Build test - macOS
@@ -143,15 +143,15 @@ jobs:
 
       - name: Build binary
         run: |
-          echo "Building pal-broker for macOS..."
-          go build -o pal-broker ./cmd/pal-broker
-          ./pal-broker --version
+          echo "Building openpal for macOS..."
+          go build -o openpal ./cmd/openpal
+          ./openpal --version
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: pal-broker-binary-macos
-          path: pal-broker
+          name: openpal-binary-macos
+          path: openpal
           retention-days: 7
 
   # Build test - Windows
@@ -173,16 +173,16 @@ jobs:
 
       - name: Build binary
         run: |
-          Write-Host "Building pal-broker for Windows..."
-          go build -o pal-broker.exe ./cmd/pal-broker
-          ./pal-broker.exe --version
+          Write-Host "Building openpal for Windows..."
+          go build -o openpal.exe ./cmd/openpal
+          ./openpal.exe --version
 
       - name: Upload build artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pal-broker-binary-windows
-          path: pal-broker.exe
+          name: openpal-binary-windows
+          path: openpal.exe
           retention-days: 7
 
   # Code quality checks (Linux only)

@@ -1,5 +1,5 @@
 # Build artifacts
-/pal-broker
+/openpal
 /ws-test
 dist/
 *.exe
@@ -15,7 +15,7 @@ dist/
 coverage.out
 
 # Session data
-/tmp/pal-broker/
+/tmp/openpal/
 *.pid
 ws_port
 
@@ -39,5 +39,5 @@ ws_port
 !AGENTS.md
 
 # Secrets
-.pal-broker-secrets
+.openpal-secrets
 *.env

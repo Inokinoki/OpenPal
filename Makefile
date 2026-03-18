@@ -1,10 +1,10 @@
-# pal-broker Makefile
+# openpal Makefile
 # Common operations for development and deployment
 
 .PHONY: help build build-ws-test test clean install run fmt lint vet race coverage deps version
 
 # Variables
-BINARY_NAME=pal-broker
+BINARY_NAME=openpal
 WS_TEST_NAME=ws-test
 VERSION=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 BUILD_TIME=$(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -16,7 +16,7 @@ LDFLAGS=-ldflags "-s -w -X main.version=${VERSION} -X main.buildTime=${BUILD_TIM
 
 # Default target
 help:
-	@echo "pal-broker Makefile"
+	@echo "openpal Makefile"
 	@echo ""
 	@echo "Usage: make [target]"
 	@echo ""
@@ -26,7 +26,7 @@ help:
 	@echo "  test        Run tests"
 	@echo "  clean       Clean build artifacts"
 	@echo "  install     Install binary to /usr/local/bin"
-	@echo "  run         Run pal-broker (requires arguments)"
+	@echo "  run         Run openpal (requires arguments)"
 	@echo "  fmt         Format code"
 	@echo "  lint        Run linter"
 	@echo "  vet         Run go vet"
@@ -44,7 +44,7 @@ build:
 	@echo "Go: ${GO_VERSION}"
 	@echo "Commit: ${GIT_COMMIT}"
 	@echo ""
-	CGO_ENABLED=0 go build ${LDFLAGS} -o ${BINARY_NAME} ./cmd/pal-broker
+	CGO_ENABLED=0 go build ${LDFLAGS} -o ${BINARY_NAME} ./cmd/openpal
 	@echo ""
 	@echo "✅ Build complete: ./${BINARY_NAME}"
 	@ls -lh ${BINARY_NAME}
@@ -60,27 +60,27 @@ build-ws-test:
 # Build for specific platform
 build-linux:
 	@echo "Building for Linux (amd64)..."
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ${LDFLAGS} -o ${BINARY_NAME}-linux-amd64 ./cmd/pal-broker
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ${LDFLAGS} -o ${BINARY_NAME}-linux-amd64 ./cmd/openpal
 	@echo "✅ Built: ./${BINARY_NAME}-linux-amd64"
 
 build-linux-arm64:
 	@echo "Building for Linux (arm64)..."
-	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build ${LDFLAGS} -o ${BINARY_NAME}-linux-arm64 ./cmd/pal-broker
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build ${LDFLAGS} -o ${BINARY_NAME}-linux-arm64 ./cmd/openpal
 	@echo "✅ Built: ./${BINARY_NAME}-linux-arm64"
 
 build-darwin:
 	@echo "Building for macOS (amd64)..."
-	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build ${LDFLAGS} -o ${BINARY_NAME}-darwin-amd64 ./cmd/pal-broker
+	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build ${LDFLAGS} -o ${BINARY_NAME}-darwin-amd64 ./cmd/openpal
 	@echo "✅ Built: ./${BINARY_NAME}-darwin-amd64"
 
 build-darwin-arm64:
 	@echo "Building for macOS (arm64)..."
-	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build ${LDFLAGS} -o ${BINARY_NAME}-darwin-arm64 ./cmd/pal-broker
+	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build ${LDFLAGS} -o ${BINARY_NAME}-darwin-arm64 ./cmd/openpal
 	@echo "✅ Built: ./${BINARY_NAME}-darwin-arm64"
 
 build-windows:
 	@echo "Building for Windows (amd64)..."
-	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ${LDFLAGS} -o ${BINARY_NAME}-windows-amd64.exe ./cmd/pal-broker
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ${LDFLAGS} -o ${BINARY_NAME}-windows-amd64.exe ./cmd/openpal
 	@echo "✅ Built: ./${BINARY_NAME}-windows-amd64.exe"
 
 # Build all platforms
@@ -163,15 +163,15 @@ deps:
 
 # Show version info
 version:
-	@echo "pal-broker"
+	@echo "openpal"
 	@echo "Version: ${VERSION}"
 	@echo "Go: ${GO_VERSION}"
 	@echo "Commit: ${GIT_COMMIT}"
 	@echo "Build Time: ${BUILD_TIME}"
 
-# Run pal-broker (requires arguments)
+# Run openpal (requires arguments)
 run:
-	@echo "Running pal-broker..."
+	@echo "Running openpal..."
 	@echo "Usage: make run ARGS='--provider claude --quest-id q1 --task \"Refactor code\"'"
 	@echo ""
 	./${BINARY_NAME} ${ARGS}
@@ -211,7 +211,7 @@ dev:
 		air; \
 	else \
 		echo "⚠️  air not installed. Install with: go install github.com/air-verse/air@latest"; \
-		echo "   Or use: go run ./cmd/pal-broker/main.go ..."; \
+		echo "   Or use: go run ./cmd/openpal/main.go ..."; \
 	fi
 
 # Docker build (if Dockerfile exists)
@@ -231,18 +231,18 @@ tavern-help:
 	@echo ""
 	@echo "1. Build and install on remote server:"
 	@echo "   make build-linux"
-	@echo "   scp ${BINARY_NAME}-linux-amd64 user@server:/usr/local/bin/pal-broker"
-	@echo "   ssh user@server 'chmod +x /usr/local/bin/pal-broker'"
+	@echo "   scp ${BINARY_NAME}-linux-amd64 user@server:/usr/local/bin/openpal"
+	@echo "   ssh user@server 'chmod +x /usr/local/bin/openpal'"
 	@echo ""
 	@echo "2. Run in screen session:"
-	@echo "   ssh user@server 'screen -dmS pal-broker-q1 pal-broker run --provider claude --quest-id q1 --task \"Refactor code\"'"
+	@echo "   ssh user@server 'screen -dmS openpal-q1 openpal run --provider claude --quest-id q1 --task \"Refactor code\"'"
 	@echo ""
 	@echo "3. Check status:"
-	@echo "   ssh user@server 'cat /tmp/pal-broker/q1/status.json | jq .'"
-	@echo "   ssh user@server 'cat /tmp/pal-broker/q1/progress.json | jq .'"
+	@echo "   ssh user@server 'cat /tmp/openpal/q1/status.json | jq .'"
+	@echo "   ssh user@server 'cat /tmp/openpal/q1/progress.json | jq .'"
 	@echo ""
 	@echo "4. View logs:"
-	@echo "   ssh user@server 'tail -f /tmp/pal-broker/q1/output.jsonl'"
+	@echo "   ssh user@server 'tail -f /tmp/openpal/q1/output.jsonl'"
 	@echo ""
 	@echo "5. Test WebSocket connection:"
 	@echo "   make build-ws-test"

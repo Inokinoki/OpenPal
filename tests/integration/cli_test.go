@@ -140,21 +140,21 @@ func TestCopilot_Integration(t *testing.T) {
 	}
 }
 
-// TestPalBroker_Claude Test pal-broker integration with Claude
-func TestPalBroker_Claude(t *testing.T) {
-	skipIfNoCLI(t, "pal-broker")
+// TestOpenPal_Claude Test openpal integration with Claude
+func TestOpenPal_Claude(t *testing.T) {
+	skipIfNoCLI(t, "openpal")
 	skipIfNoCLI(t, "claude")
 
 	if os.Getenv("ANTHROPIC_API_KEY") == "" && os.Getenv("CLAUDE_API_KEY") == "" {
 		t.Skip("Skipping: No API key")
 	}
 
-	t.Log("Testing pal-broker with Claude...")
+	t.Log("Testing openpal with Claude...")
 
 	tmpDir := t.TempDir()
 
-	// Start pal-broker
-	cmd := exec.Command("pal-broker",
+	// Start openpal
+	cmd := exec.Command("openpal",
 		"--task", "integration_test",
 		"--provider", "claude",
 		"--work-dir", tmpDir,
@@ -163,7 +163,7 @@ func TestPalBroker_Claude(t *testing.T) {
 
 	err := cmd.Start()
 	if err != nil {
-		t.Fatalf("Failed to start pal-broker: %v", err)
+		t.Fatalf("Failed to start openpal: %v", err)
 	}
 
 	// Wait 5 seconds
@@ -171,7 +171,7 @@ func TestPalBroker_Claude(t *testing.T) {
 
 	// Check if process is still running
 	if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
-		t.Error("pal-broker exited unexpectedly")
+		t.Error("openpal exited unexpectedly")
 	}
 
 	// Cleanup
@@ -190,7 +190,7 @@ func TestAllCLIsInstalled(t *testing.T) {
 		"claude",
 		"codex",
 		"copilot",
-		"pal-broker",
+		"openpal",
 	}
 
 	for _, cli := range clis {

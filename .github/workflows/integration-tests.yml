@@ -60,7 +60,7 @@ jobs:
       # Test configuration
       PAL_PROVIDER: claude
       PAL_WORK_DIR: /tmp/workspace
-      PAL_SESSION_DIR: /tmp/pal-broker-sessions
+      PAL_SESSION_DIR: /tmp/openpal-sessions
       CGO_ENABLED: 0
 
     steps:
@@ -92,7 +92,7 @@ jobs:
       - name: Install GitHub Copilot CLI
         run: |
           echo "Installing GitHub Copilot CLI..."
-          npm install -g @github-copilot-cli/cli
+          npm install -g @github-copilot-cli
           export PATH="$(npm prefix -g)/bin:$PATH"
           copilot --version || echo "copilot CLI installed"
 

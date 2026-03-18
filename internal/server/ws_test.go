@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"pal-broker/internal/state"
+	"openpal/internal/state"
 )
 
 // TestWebSocketClientMethods Test WebSocketClient methods

@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"pal-broker/internal/util"
+	"openpal/internal/util"
 )
 
 // binarySearchSeq - Find first index where event.Seq > fromSeq (binary search)
@@ -87,7 +87,7 @@ type Manager struct {
 
 // Cache configuration constants
 // Optimized: more aggressive eviction for better memory efficiency
-// Tuned for typical pal-broker workload: short-lived tasks with bursty output
+// Tuned for typical openpal workload: short-lived tasks with bursty output
 const (
 	DefaultCacheTTL    = 60 * time.Second // Reduced for fresher data and lower memory
 	DefaultMaxCacheAge = 2 * time.Minute  // Aggressive memory freeing

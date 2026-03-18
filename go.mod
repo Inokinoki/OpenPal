@@ -1,4 +1,4 @@
-module pal-broker
+module openpal
 
 go 1.24.0
 

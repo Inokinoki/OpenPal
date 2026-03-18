@@ -14,9 +14,9 @@ import (
 	"syscall"
 	"time"
 
-	"pal-broker/internal/adapter"
-	"pal-broker/internal/server"
-	"pal-broker/internal/state"
+	"openpal/internal/adapter"
+	"openpal/internal/server"
+	"openpal/internal/state"
 )
 
 // Build metadata (set via ldflags during build)

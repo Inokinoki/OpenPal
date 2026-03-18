@@ -43,8 +43,8 @@ jobs:
       - name: Upload all binaries
         uses: actions/upload-artifact@v4
         with:
-          name: pal-broker-binaries
-          path: pal-broker-*
+          name: openpal-binaries
+          path: openpal-*
           retention-days: 30
 
   # 创建 GitHub Release（使用 Makefile）
@@ -104,37 +104,37 @@ jobs:
           ### Linux
           \`\`\`bash
           # AMD64
-          wget https://github.com/\${{ github.repository }}/releases/download/${{ steps.get_version.outputs.version }}/pal-broker-linux-amd64.tar.gz
-          tar -xzf pal-broker-linux-amd64.tar.gz
-          sudo mv pal-broker-linux-amd64 /usr/local/bin/pal-broker
-          
+          wget https://github.com/\${{ github.repository }}/releases/download/${{ steps.get_version.outputs.version }}/openpal-linux-amd64.tar.gz
+          tar -xzf openpal-linux-amd64.tar.gz
+          sudo mv openpal-linux-amd64 /usr/local/bin/openpal
+
           # ARM64
-          wget https://github.com/\${{ github.repository }}/releases/download/${{ steps.get_version.outputs.version }}/pal-broker-linux-arm64.tar.gz
-          tar -xzf pal-broker-linux-arm64.tar.gz
-          sudo mv pal-broker-linux-arm64 /usr/local/bin/pal-broker
+          wget https://github.com/\${{ github.repository }}/releases/download/${{ steps.get_version.outputs.version }}/openpal-linux-arm64.tar.gz
+          tar -xzf openpal-linux-arm64.tar.gz
+          sudo mv openpal-linux-arm64 /usr/local/bin/openpal
           \`\`\`
-          
+
           ### macOS
           \`\`\`bash
           # AMD64 (Intel)
-          wget https://github.com/\${{ github.repository }}/releases/download/${{ steps.get_version.outputs.version }}/pal-broker-darwin-amd64.tar.gz
-          tar -xzf pal-broker-darwin-amd64.tar.gz
-          sudo mv pal-broker-darwin-amd64 /usr/local/bin/pal-broker
-          
+          wget https://github.com/\${{ github.repository }}/releases/download/${{ steps.get_version.outputs.version }}/openpal-darwin-amd64.tar.gz
+          tar -xzf openpal-darwin-amd64.tar.gz
+          sudo mv openpal-darwin-amd64 /usr/local/bin/openpal
+
           # ARM64 (Apple Silicon)
-          wget https://github.com/\${{ github.repository }}/releases/download/${{ steps.get_version.outputs.version }}/pal-broker-darwin-arm64.tar.gz
-          tar -xzf pal-broker-darwin-arm64.tar.gz
-          sudo mv pal-broker-darwin-arm64 /usr/local/bin/pal-broker
+          wget https://github.com/\${{ github.repository }}/releases/download/${{ steps.get_version.outputs.version }}/openpal-darwin-arm64.tar.gz
+          tar -xzf openpal-darwin-arm64.tar.gz
+          sudo mv openpal-darwin-arm64 /usr/local/bin/openpal
           \`\`\`
-          
+
           ## 🚀 Usage
-          
+
           \`\`\`bash
           # Basic usage
-          pal-broker run --provider claude --quest-id q1 --task "Your task"
-          
+          openpal run --provider claude --quest-id q1 --task "Your task"
+
           # With configuration
-          pal-broker run \\
+          openpal run \\
             --provider claude \\
             --cli-path /usr/local/bin/claude \\
             --work-dir /workspace \\

@@ -53,7 +53,7 @@ func TestClaude_SessionRecovery(t *testing.T) {
 		t.Logf("Warning: Session file not created at %s", sessionFile)
 	}
 
-	// Simulate pal-broker saving the session
+	// Simulate openpal saving the session
 	if err := os.MkdirAll(sessionDir, 0755); err != nil {
 		t.Fatalf("Failed to create session directory: %v", err)
 	}
@@ -242,21 +242,21 @@ func TestGemini_SessionRecovery(t *testing.T) {
 	t.Log("Gemini session recovery test completed")
 }
 
-// TestPalBroker_SessionRecovery - Test pal-broker session recovery
-func TestPalBroker_SessionRecovery(t *testing.T) {
-	skipIfNoCLI(t, "pal-broker")
+// TestOpenPal_SessionRecovery - Test openpal session recovery
+func TestOpenPal_SessionRecovery(t *testing.T) {
+	skipIfNoCLI(t, "openpal")
 
 	if !hasAPIKey(t, "ANTHROPIC_API_KEY", "CLAUDE_API_KEY") {
 		t.Skip("Skipping: No API key found")
 	}
 
-	t.Log("Testing pal-broker session recovery...")
+	t.Log("Testing openpal session recovery...")
 
 	tmpDir := t.TempDir()
 	taskID := "session_recovery_test"
 
-	// Phase 1: Start pal-broker with Claude
-	cmd1 := exec.Command("pal-broker",
+	// Phase 1: Start openpal with Claude
+	cmd1 := exec.Command("openpal",
 		"--task", taskID,
 		"--provider", "claude",
 		"--work-dir", tmpDir,
@@ -264,7 +264,7 @@ func TestPalBroker_SessionRecovery(t *testing.T) {
 	)
 
 	if err := cmd1.Start(); err != nil {
-		t.Fatalf("Failed to start pal-broker phase 1: %v", err)
+		t.Fatalf("Failed to start openpal phase 1: %v", err)
 	}
 
 	// Wait for initialization
@@ -279,16 +279,16 @@ func TestPalBroker_SessionRecovery(t *testing.T) {
 		t.Logf("Session file content: %s", string(data))
 	}
 
-	// Stop pal-broker
+	// Stop openpal
 	cmd1.Process.Kill()
 	cmd1.Wait()
-	t.Log("Phase 1 completed, pal-broker stopped")
+	t.Log("Phase 1 completed, openpal stopped")
 
 	// Wait a bit to simulate restart delay
 	time.Sleep(1 * time.Second)
 
-	// Phase 2: Restart pal-broker (should recover session)
-	cmd2 := exec.Command("pal-broker",
+	// Phase 2: Restart openpal (should recover session)
+	cmd2 := exec.Command("openpal",
 		"--task", taskID,
 		"--provider", "claude",
 		"--work-dir", tmpDir,
@@ -296,7 +296,7 @@ func TestPalBroker_SessionRecovery(t *testing.T) {
 	)
 
 	if err := cmd2.Start(); err != nil {
-		t.Fatalf("Failed to start pal-broker phase 2: %v", err)
+		t.Fatalf("Failed to start openpal phase 2: %v", err)
 	}
 
 	// Wait for initialization
@@ -319,7 +319,7 @@ func TestPalBroker_SessionRecovery(t *testing.T) {
 	cmd2.Process.Kill()
 	cmd2.Wait()
 
-	t.Log("Pal-broker session recovery test completed")
+	t.Log("OpenPal session recovery test completed")
 }
 
 // TestAllProviders_SessionRecovery - Test session recovery for all providers

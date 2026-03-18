@@ -38,8 +38,8 @@ jobs:
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: pal-broker-ci-pipeline
-          path: pal-broker
+          name: openpal-ci-pipeline
+          path: openpal
           retention-days: 7
 
   # Cross-platform tests
@@ -65,14 +65,14 @@ jobs:
       - name: Build binary
         run: |
           echo "Building for macOS..."
-          go build -o pal-broker-macos ./cmd/pal-broker
-          ./pal-broker-macos --version
+          go build -o openpal-macos ./cmd/openpal
+          ./openpal-macos --version
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: pal-broker-macos-amd64
-          path: pal-broker-macos
+          name: openpal-macos-amd64
+          path: openpal-macos
           retention-days: 7
 
   test-windows:
@@ -100,14 +100,14 @@ jobs:
       - name: Build binary
         run: |
           Write-Host "Building for Windows..."
-          go build -o pal-broker-windows.exe ./cmd/pal-broker
-          ./pal-broker-windows.exe --version
+          go build -o openpal-windows.exe ./cmd/openpal
+          ./openpal-windows.exe --version
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: pal-broker-windows-amd64
-          path: pal-broker-windows.exe
+          name: openpal-windows-amd64
+          path: openpal-windows.exe
           retention-days: 7
 
   # 多平台构建（使用 Makefile）
@@ -132,29 +132,29 @@ jobs:
       - name: Upload Linux amd64
         uses: actions/upload-artifact@v4
         with:
-          name: pal-broker-linux-amd64
-          path: pal-broker-linux-amd64
+          name: openpal-linux-amd64
+          path: openpal-linux-amd64
           retention-days: 7
 
       - name: Upload Linux arm64
         uses: actions/upload-artifact@v4
         with:
-          name: pal-broker-linux-arm64
-          path: pal-broker-linux-arm64
+          name: openpal-linux-arm64
+          path: openpal-linux-arm64
           retention-days: 7
 
       - name: Upload macOS amd64
         uses: actions/upload-artifact@v4
         with:
-          name: pal-broker-darwin-amd64
-          path: pal-broker-darwin-amd64
+          name: openpal-darwin-amd64
+          path: openpal-darwin-amd64
           retention-days: 7
 
       - name: Upload macOS arm64
         uses: actions/upload-artifact@v4
         with:
-          name: pal-broker-darwin-arm64
-          path: pal-broker-darwin-arm64
+          name: openpal-darwin-arm64
+          path: openpal-darwin-arm64
           retention-days: 7
 
   # 代码质量检查（使用 Makefile）
@@ -209,7 +209,7 @@ jobs:
       - name: Create test directories
         run: |
           mkdir -p /tmp/workspace
-          mkdir -p /tmp/pal-broker-sessions
+          mkdir -p /tmp/openpal-sessions
 
       - name: Install Codex CLI
         run: |
@@ -266,13 +266,101 @@ jobs:
           echo ""
           echo "Real CLIs will use configured API keys from environment"
 
-      - name: Build pal-broker
+      - name: Build openpal
         run: |
-          echo "Building pal-broker..."
-          go build -o pal-broker ./cmd/pal-broker
-          chmod +x pal-broker
+          echo "Building openpal..."
+          go build -o openpal ./cmd/openpal
+          chmod +x openpal
           export PATH="$PWD:$PATH"
-          echo "pal-broker built and added to PATH"
+          echo "openpal built and added to PATH"
+
+      - name: Configure Codex CLI
+        if: env.OPENAI_API_KEY != ''
+        run: |
+          echo "Configuring Codex CLI..."
+          # Codex reads OPENAI_API_KEY from environment automatically
+          export OPENAI_API_KEY="$OPENAI_API_KEY"
+          # Test basic Codex command to verify configuration
+          codex --version || echo "Codex version check failed"
+
+      - name: Configure Copilot CLI
+        if: env.GITHUB_TOKEN != ''
+        run: |
+          echo "Configuring Copilot CLI..."
+          # Copilot reads GITHUB_TOKEN from environment automatically
+          export GITHUB_TOKEN="$GITHUB_TOKEN"
+          # Test basic Copilot command to verify configuration
+          copilot --version || echo "Copilot version check failed"
+
+      - name: Configure Copilot CLI
+        if: env.GITHUB_TOKEN != ''
+        run: |
+          echo "Configuring Copilot CLI..."
+          # Copilot reads GITHUB_TOKEN from environment automatically
+          echo "Copilot will use GITHUB_TOKEN from environment"
+
+      - name: Install Codex CLI
+        run: |
+          echo "Installing Codex CLI..."
+          npm install -g @openai/codex
+          export PATH="$(npm prefix -g)/bin:$PATH"
+          codex --version || echo "Codex CLI installed"
+
+      - name: Install Claude Code CLI
+        run: |
+          echo "Installing Claude Code CLI..."
+          npm install -g @anthropic-ai/claude-code || echo "Claude CLI installation failed"
+          export PATH="$HOME/.local/bin:$PATH"
+
+      - name: Install GitHub Copilot CLI
+        run: |
+          echo "Installing GitHub Copilot CLI..."
+          npm install -g @github/copilot
+
+      - name: Install Gemini CLI
+        run: |
+          echo "Installing Gemini CLI..."
+          npm install -g @google/gemini-cli || echo "Gemini CLI installation failed"
+
+      - name: Install OpenCode CLI
+        run: |
+          echo "Installing OpenCode CLI..."
+          npm i -g opencode-ai
+          export PATH="$(npm prefix -g)/bin:$PATH"
+          opencode --version || echo "opencode CLI installed"
+
+      - name: Verify CLI installations
+        run: |
+          echo "Verifying CLI installations..."
+          export PATH="$HOME/.local/bin:$(npm prefix -g)/bin:$PATH"
+
+          echo "Claude CLI: $(which claude || echo 'not found')"
+          echo "Codex CLI: $(which codex || echo 'not found')"
+          echo "OpenAI CLI: $(which openai || echo 'not found')"
+          echo "Copilot CLI: $(which copilot || echo 'not found')"
+          echo "Gemini CLI: $(which gemini || echo 'not found')"
+          echo "OpenCode CLI: $(which opencode || echo 'not found')"
+
+          # Test basic functionality
+          echo ""
+          echo "Testing CLI availability..."
+          command -v claude && echo "✓ claude available" || echo "✗ claude not available (will skip tests)"
+          command -v codex && echo "✓ codex available" || echo "✗ codex not available (will skip tests)"
+          command -v openai && echo "✓ openai available" || echo "✗ openai not available"
+          command -v copilot && echo "✓ copilot available" || echo "✗ copilot not available (will skip tests)"
+          command -v gemini && echo "✓ gemini available" || echo "✗ gemini not available (will skip tests)"
+          command -v opencode && echo "✓ opencode available" || echo "✗ opencode not available (will skip tests)"
+
+          echo ""
+          echo "Real CLIs will use configured API keys from environment"
+
+      - name: Build openpal
+        run: |
+          echo "Building openpal..."
+          go build -o openpal ./cmd/openpal
+          chmod +x openpal
+          export PATH="$PWD:$PATH"
+          echo "openpal built and added to PATH"
 
       - name: Configure Codex CLI
         if: env.OPENAI_API_KEY != ''
@@ -312,8 +400,8 @@ jobs:
           [ -n "$COPILOT_GITHUB_TOKEN" ] && echo "✓ COPILOT_GITHUB_TOKEN" || echo "✗ COPILOT_GITHUB_TOKEN"
           [ -n "$OPENAI_API_KEY" ] && echo "✓ OPENAI_API_KEY" || echo "✗ OPENAI_API_KEY"
           echo ""
-          echo "Checking pal-broker in PATH:"
-          which pal-broker || echo "pal-broker not found"
+          echo "Checking openpal in PATH:"
+          which openpal || echo "openpal not found"
           echo ""
           echo "Checking for npm-installed CLIs:"
           which opencode && echo "✓ opencode found" || echo "✗ opencode not found"
