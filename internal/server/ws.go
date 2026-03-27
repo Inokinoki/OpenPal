@@ -155,17 +155,17 @@ func validateCommand(cmd string) bool {
 	if len(cmd) > maxCommandLength {
 		return false
 	}
-	
+
 	allowedCommands := map[string]bool{
-		"heartbeat":    true,
-		"send_input":   true,
-		"start_task":   true,
-		"cancel":       true,
-		"get_status":   true,
-		"approve":      true,
-		"reject":       true,
+		"heartbeat":  true,
+		"send_input": true,
+		"start_task": true,
+		"cancel":     true,
+		"get_status": true,
+		"approve":    true,
+		"reject":     true,
 	}
-	
+
 	return allowedCommands[cmd]
 }
 
@@ -173,7 +173,7 @@ func validateContent(content string) bool {
 	if len(content) > maxContentLength {
 		return false
 	}
-	
+
 	for _, r := range content {
 		if r < 32 && r != '\n' && r != '\r' && r != '\t' {
 			return false
@@ -182,7 +182,7 @@ func validateContent(content string) bool {
 			return false
 		}
 	}
-	
+
 	return true
 }
 

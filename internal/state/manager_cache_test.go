@@ -291,7 +291,7 @@ func TestConcurrentCacheAccess(t *testing.T) {
 				event := Event{
 					Type: "chunk",
 					Data: map[string]string{
-						"content":  string(rune('A' + id)),
+						"content":   string(rune('A' + id)),
 						"goroutine": string(rune('0' + j)),
 					},
 				}
@@ -389,7 +389,7 @@ func TestCacheMemoryEstimation(t *testing.T) {
 	totalEvents := stats["total_events"].(int)
 
 	// Check that estimate is reasonable
-	expectedMinKB := (totalEvents * 200) / 1024 // Lower bound based on AvgEventSize
+	expectedMinKB := (totalEvents * 200) / 1024   // Lower bound based on AvgEventSize
 	expectedMaxKB := (totalEvents * 10000) / 1024 // Upper bound for safety
 
 	if estimatedKB < expectedMinKB {
@@ -516,8 +516,8 @@ func TestBinarySearchSingleElement(t *testing.T) {
 
 	// Test various target values
 	testCases := []struct {
-		fromSeq    int64
-		expected   int
+		fromSeq     int64
+		expected    int
 		description string
 	}{
 		{0, 0, "target < element (should insert at 0)"},
@@ -547,8 +547,8 @@ func TestBinarySearchMultipleElements(t *testing.T) {
 	}
 
 	testCases := []struct {
-		fromSeq    int64
-		expected   int
+		fromSeq     int64
+		expected    int
 		description string
 	}{
 		{0, 0, "target before all elements"},
@@ -586,8 +586,8 @@ func TestBinarySearchDuplicateSequences(t *testing.T) {
 	// Test that duplicates are handled correctly
 	// The function should return the first index where event.Seq > fromSeq
 	testCases := []struct {
-		fromSeq    int64
-		expected   int
+		fromSeq     int64
+		expected    int
 		description string
 	}{
 		{0, 0, "target before duplicates"},
@@ -612,9 +612,9 @@ func TestBinarySearchLargeDataset(t *testing.T) {
 	events := make([]Event, 10000)
 	for i := 0; i < 10000; i++ {
 		events[i] = Event{
-			Seq:   int64(i) + 1, // Sequence numbers from 1 to 10000
-			Type:  "chunk",
-			Data:  map[string]string{"content": fmt.Sprintf("event_%d", i+1)},
+			Seq:  int64(i) + 1, // Sequence numbers from 1 to 10000
+			Type: "chunk",
+			Data: map[string]string{"content": fmt.Sprintf("event_%d", i+1)},
 		}
 	}
 
@@ -660,8 +660,8 @@ func TestBinarySearchEdgeValues(t *testing.T) {
 	}
 
 	testCases := []struct {
-		fromSeq    int64
-		expected   int
+		fromSeq     int64
+		expected    int
 		description string
 	}{
 		{math.MinInt64, 0, "minimum int64 target"},

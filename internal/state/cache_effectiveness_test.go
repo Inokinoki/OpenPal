@@ -184,13 +184,13 @@ func TestCacheEffectivenessWithLargeData(t *testing.T) {
 	largeData := make([]byte, 10*1024) // 10KB per event
 	for i := 0; i < 3; i++ {
 		for j := range largeData {
-			largeData[j] = byte(i * 100 + j % 256)
+			largeData[j] = byte(i*100 + j%256)
 		}
 
 		event := Event{
 			Type: "chunk",
 			Data: map[string]string{
-				"content": string(largeData),
+				"content":  string(largeData),
 				"metadata": fmt.Sprintf("large_event_%d", i),
 			},
 		}
@@ -198,7 +198,7 @@ func TestCacheEffectivenessWithLargeData(t *testing.T) {
 	}
 
 	// Get stats after adding large data
-	
+
 	// Perform repeated reads - should be cache hits
 	for i := 0; i < 5; i++ {
 		_, _ = mgr.GetIncrementalOutput(taskID, 0)

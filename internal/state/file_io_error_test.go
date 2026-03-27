@@ -1,8 +1,8 @@
 package state
 
 import (
-		"fmt"
-		"os"
+	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"

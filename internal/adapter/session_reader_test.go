@@ -301,8 +301,8 @@ func TestClaudeSessionReaderWithComplexData(t *testing.T) {
 	complexData := map[string]interface{}{
 		"content": "Complex message",
 		"metadata": map[string]interface{}{
-			"model":     "claude-3",
-			"tokens":    150,
+			"model":          "claude-3",
+			"tokens":         150,
 			"function_calls": []string{"read_file", "write_file"},
 		},
 		"nested": map[string]interface{}{

@@ -89,7 +89,7 @@ func TestRecoverSessionFromCLISuccess(t *testing.T) {
 			Type:      "assistant",
 			Timestamp: time.Now().UnixMilli() - 1000,
 			Data: map[string]interface{}{
-				"content": "I'd be happy to help with your code!",
+				"content":  "I'd be happy to help with your code!",
 				"thinking": "The user wants assistance with programming",
 			},
 		},
