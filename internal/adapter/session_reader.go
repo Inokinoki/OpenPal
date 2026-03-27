@@ -246,7 +246,7 @@ func (r *claudeSessionReader) fileContainsSessionID(path, sessionID string) bool
 		}
 	}
 
-	return scanner.Err() == nil
+	return false
 }
 
 // parseSessionFile reads and parses a Claude session JSONL file

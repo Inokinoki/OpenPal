@@ -211,14 +211,14 @@ func TestCacheStatistics(t *testing.T) {
 		t.Error("Expected hits to be non-nil")
 		return
 	}
-	if stats["total_updates"] == nil {
-		t.Error("Expected total_updates to be non-nil")
+	if stats["updates"] == nil {
+		t.Error("Expected updates to be non-nil")
 		return
 	}
 
 	// Convert with type safety
 	hits := stats["hits"].(int64)
-	updates := stats["total_updates"].(int64)
+	updates := stats["updates"].(int64)
 
 	t.Logf("Cache stats - Hits: %d, Updates: %d", hits, updates)
 

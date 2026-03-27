@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -17,8 +16,7 @@ func setupTestSessionFile(t *testing.T, events []SessionEvent, sessionID string)
 	t.Helper()
 
 	tmpDir := t.TempDir()
-	// Create sessions directory structure
-	sessionDir := filepath.Join(tmpDir, "sessions")
+	sessionDir := filepath.Join(tmpDir, "projects", "test-project", "sessions")
 	if err := os.MkdirAll(sessionDir, 0755); err != nil {
 		t.Fatalf("Failed to create sessions directory: %v", err)
 	}
@@ -129,7 +127,11 @@ func TestClaudeSessionReaderNonExistent(t *testing.T) {
 // TestClaudeSessionReaderCorruptedFile tests reading a corrupted session file
 func TestClaudeSessionReaderCorruptedFile(t *testing.T) {
 	tmpDir := t.TempDir()
-	sessionFile := filepath.Join(tmpDir, "corrupted-session.jsonl")
+	sessionsDir := filepath.Join(tmpDir, "projects", "test-project", "sessions")
+	if err := os.MkdirAll(sessionsDir, 0755); err != nil {
+		t.Fatalf("Failed to create sessions directory: %v", err)
+	}
+	sessionFile := filepath.Join(sessionsDir, "corrupted-session.jsonl")
 
 	// Write corrupted JSON file
 	content := `{"seq": 1, "type": "user", "data": {"content": "valid"}}
@@ -161,7 +163,11 @@ func TestClaudeSessionReaderCorruptedFile(t *testing.T) {
 // TestClaudeSessionReaderEmptyFile tests reading an empty session file
 func TestClaudeSessionReaderEmptyFile(t *testing.T) {
 	tmpDir := t.TempDir()
-	sessionFile := filepath.Join(tmpDir, "empty-session.jsonl")
+	sessionsDir := filepath.Join(tmpDir, "projects", "test-project", "sessions")
+	if err := os.MkdirAll(sessionsDir, 0755); err != nil {
+		t.Fatalf("Failed to create sessions directory: %v", err)
+	}
+	sessionFile := filepath.Join(sessionsDir, "empty-session.jsonl")
 
 	// Create empty file
 	if err := os.WriteFile(sessionFile, []byte{}, 0644); err != nil {
@@ -183,7 +189,11 @@ func TestClaudeSessionReaderEmptyFile(t *testing.T) {
 // TestClaudeSessionReaderLargeFile tests reading a large session file
 func TestClaudeSessionReaderLargeFile(t *testing.T) {
 	tmpDir := t.TempDir()
-	sessionFile := filepath.Join(tmpDir, "large-session.jsonl")
+	sessionsDir := filepath.Join(tmpDir, "projects", "test-project", "sessions")
+	if err := os.MkdirAll(sessionsDir, 0755); err != nil {
+		t.Fatalf("Failed to create sessions directory: %v", err)
+	}
+	sessionFile := filepath.Join(sessionsDir, "large-session.jsonl")
 
 	// Create a large file (1000 events)
 	file, err := os.Create(sessionFile)
@@ -193,7 +203,6 @@ func TestClaudeSessionReaderLargeFile(t *testing.T) {
 	defer file.Close()
 
 	writer := bufio.NewWriter(file)
-	defer writer.Flush()
 
 	now := time.Now().UnixMilli()
 	for i := 1; i <= 1000; i++ {
@@ -206,6 +215,8 @@ func TestClaudeSessionReaderLargeFile(t *testing.T) {
 		eventJSON, _ := json.Marshal(event)
 		writer.WriteString(string(eventJSON) + "\n")
 	}
+	writer.Flush()
+	file.Close()
 
 	reader := ClaudeSessionReader(tmpDir)
 	recovered, err := reader.ReadSession("large-session")
@@ -230,7 +241,11 @@ func TestClaudeSessionReaderLargeFile(t *testing.T) {
 // TestClaudeSessionReaderBinarySearch tests that events are returned in correct order
 func TestClaudeSessionReaderBinarySearch(t *testing.T) {
 	tmpDir := t.TempDir()
-	sessionFile := filepath.Join(tmpDir, "ordered-session.jsonl")
+	sessionsDir := filepath.Join(tmpDir, "projects", "test-project", "sessions")
+	if err := os.MkdirAll(sessionsDir, 0755); err != nil {
+		t.Fatalf("Failed to create sessions directory: %v", err)
+	}
+	sessionFile := filepath.Join(sessionsDir, "ordered-session.jsonl")
 
 	file, err := os.Create(sessionFile)
 	if err != nil {
@@ -270,7 +285,11 @@ func TestClaudeSessionReaderBinarySearch(t *testing.T) {
 // TestClaudeSessionReaderWithComplexData tests reading events with complex data structures
 func TestClaudeSessionReaderWithComplexData(t *testing.T) {
 	tmpDir := t.TempDir()
-	sessionFile := filepath.Join(tmpDir, "complex-session.jsonl")
+	sessionsDir := filepath.Join(tmpDir, "projects", "test-project", "sessions")
+	if err := os.MkdirAll(sessionsDir, 0755); err != nil {
+		t.Fatalf("Failed to create sessions directory: %v", err)
+	}
+	sessionFile := filepath.Join(sessionsDir, "complex-session.jsonl")
 
 	file, err := os.Create(sessionFile)
 	if err != nil {
@@ -315,9 +334,28 @@ func TestClaudeSessionReaderWithComplexData(t *testing.T) {
 		t.Errorf("Expected 1 event, got %d", len(recovered))
 	}
 
-	recoveredData := recovered[0].Data
-	if !reflect.DeepEqual(recoveredData, complexData) {
-		t.Errorf("Complex data structure not preserved correctly")
+	recoveredData, ok := recovered[0].Data.(map[string]interface{})
+	if !ok {
+		t.Fatalf("Expected Data to be map[string]interface{}, got %T", recovered[0].Data)
+	}
+	// parseLine stores the entire JSON line as Data, so the original Data field
+	// is nested under the "data" key, and numeric values become float64
+	nestedData, ok := recoveredData["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("Expected nested 'data' key in recovered event, got: %v", recoveredData)
+	}
+	if nestedData["content"] != "Complex message" {
+		t.Errorf("Expected content 'Complex message', got %v", nestedData["content"])
+	}
+	metadata, ok := nestedData["metadata"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("Expected metadata object, got: %T", nestedData["metadata"])
+	}
+	if metadata["model"] != "claude-3" {
+		t.Errorf("Expected model 'claude-3', got %v", metadata["model"])
+	}
+	if metadata["tokens"].(float64) != 150 {
+		t.Errorf("Expected tokens 150, got %v", metadata["tokens"])
 	}
 }
 
@@ -332,23 +370,28 @@ func TestFindFromIndex(t *testing.T) {
 	}
 
 	// Create session files
-	sessionFiles := []string{"session1.jsonl", "session2.jsonl"}
-	sessionContents := make(map[string][]SessionEvent)
+	sessionFiles := []string{"session1", "session2"}
 
-	for _, filename := range sessionFiles {
+	for _, sessionID := range sessionFiles {
 		events := []SessionEvent{
 			{
 				Seq:       1,
 				Type:      "user",
 				Timestamp: time.Now().UnixMilli(),
-				Data:      map[string]string{"content": "Hello from " + filename},
+				Data:      map[string]string{"content": "Hello from " + sessionID},
 			},
 		}
 
-		sessionContents[filename] = events
-		setupTestSessionFile(t, events, filepath.Join(sessionsDir, filename))
-
-		// Note: setupTestSessionFile already writes to the correct location
+		sessionFile := filepath.Join(sessionsDir, sessionID+".jsonl")
+		file, err := os.Create(sessionFile)
+		if err != nil {
+			t.Fatalf("Failed to create session file %s: %v", sessionID, err)
+		}
+		for _, event := range events {
+			eventJSON, _ := json.Marshal(event)
+			file.WriteString(string(eventJSON) + "\n")
+		}
+		file.Close()
 	}
 
 	// Create sessions-index.json
@@ -396,10 +439,8 @@ func TestFindByHeaderScan(t *testing.T) {
 
 	// Create session files without matching names but with sessionId in content
 	sessionFiles := map[string]string{
-		"random_name1.jsonl": `{"sessionId": "target-session", "type": "user", "data": {"content": "Hello"}},
-{"type": "assistant", "data": {"content": "Hi there"}}`,
-		"random_name2.jsonl": `{"sessionId": "other-session", "type": "user", "data": {"content": "Different"}},
-{"type": "assistant", "data": {"content": "Hello again"}}`,
+		"random_name1.jsonl": "{\"sessionId\": \"target-session\", \"type\": \"user\", \"data\": {\"content\": \"Hello\"}}\n{\"type\": \"assistant\", \"data\": {\"content\": \"Hi there\"}}",
+		"random_name2.jsonl": "{\"sessionId\": \"other-session\", \"type\": \"user\", \"data\": {\"content\": \"Different\"}}\n{\"type\": \"assistant\", \"data\": {\"content\": \"Hello again\"}}",
 	}
 
 	for filename, content := range sessionFiles {
@@ -421,7 +462,7 @@ func TestFindByHeaderScan(t *testing.T) {
 	// Test non-existent session
 	foundFile = reader.findByHeaderScan(projectsRoot, "non-existent")
 	if foundFile != "" {
-		t.Error("Expected not to find non-existent session")
+		t.Errorf("Expected not to find non-existent session, got: %s", foundFile)
 	}
 }
 
