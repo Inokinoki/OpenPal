@@ -14,30 +14,6 @@ import (
 	"openpal/internal/util"
 )
 
-// acpRequestPool - Pool for reusing ACP request maps (reduces GC pressure)
-var acpRequestPool = sync.Pool{
-	New: func() interface{} {
-		return make(map[string]interface{}, 4)
-	},
-}
-
-// acpLineBufPool - Pool for reusing line read buffers (reduces allocations in sendRequest/Listen)
-var acpLineBufPool = sync.Pool{
-	New: func() interface{} {
-		buf := make([]byte, 0, 4096)
-		return &buf
-	},
-}
-
-// acpIDPool - Pool for reusable int64 IDs (avoids allocation for request IDs)
-// Optimization 2026-02-24 14:00: Reduces allocation overhead in high-frequency ACP requests
-var acpIDPool = sync.Pool{
-	New: func() interface{} {
-		id := new(int64)
-		return id
-	},
-}
-
 // ACPMessage ACP ProtocolMessage
 type ACPMessage struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -189,11 +165,13 @@ func (c *ACPClient) Start() error {
 		var err error
 		c.sessionStore, err = NewACPSessionStore(c.sessionDir, c.provider)
 		if err != nil {
-			util.DebugLog("[DEBUG] ACP session store init failed: %v", err)
-			// Non-fatal: continue without persistence
-		} else {
-			util.DebugLog("[DEBUG] ACP session store initialized for provider=%s", c.provider)
+			c.mu.Unlock()
+			c.stdin.Close()
+			c.stdout.Close()
+			c.cmd.Process.Kill()
+			return fmt.Errorf("ACP session store initialization failed (provider=%s, dir=%s): %w", c.provider, c.sessionDir, err)
 		}
+		util.DebugLog("[DEBUG] ACP session store initialized for provider=%s", c.provider)
 	}
 
 	// Set up notification handler to record session data
@@ -201,7 +179,7 @@ func (c *ACPClient) Start() error {
 		c.notificationHandler = func(msg *ACPMessage) {
 			if msg.Method == "session/update" && c.sessionID != "" {
 				if err := c.sessionStore.RecordSession(c.sessionID, msg); err != nil {
-					util.DebugLog("[DEBUG] ACP session record failed: %v", err)
+					util.WarnLog("[WARN] ACP session record failed: %v", err)
 				}
 			}
 		}
@@ -255,7 +233,7 @@ func (c *ACPClient) NewSession(cwd string, mcpServers []interface{}) (string, er
 
 	err := c.sendRequest("session/new", params, &result)
 	if err != nil {
-		util.DebugLog("[DEBUG] NewSession failed: %v", err)
+		util.WarnLog("[WARN] NewSession failed: %v", err)
 		return "", err
 	}
 
@@ -265,7 +243,7 @@ func (c *ACPClient) NewSession(cwd string, mcpServers []interface{}) (string, er
 	// Record session creation in SQLite
 	if c.sessionStore != nil {
 		if err := c.sessionStore.RecordContent(result.SessionID, "session_created", "New ACP session created"); err != nil {
-			util.DebugLog("[DEBUG] Failed to record session creation: %v", err)
+			util.WarnLog("[WARN] Failed to record session creation: %v", err)
 		}
 	}
 
@@ -288,17 +266,11 @@ func (c *ACPClient) Prompt(prompt string) error {
 	return c.sendRequest("session/prompt", params, nil)
 }
 
-// Listen Listen ACP Message (uses shared reader to avoid stdout conflict)
-// Optimized: uses c.reader (shared with sendRequest) to prevent race conditions
 func (c *ACPClient) Listen(ctx context.Context, handler func(*ACPMessage)) error {
 	reader := c.reader
 	if reader == nil {
 		return fmt.Errorf("ACP reader not initialized")
 	}
-
-	// Get line buffer from pool (reduces allocations)
-	lineBufPtr := acpLineBufPool.Get().(*[]byte)
-	defer acpLineBufPool.Put(lineBufPtr)
 
 	for {
 		select {
@@ -307,8 +279,6 @@ func (c *ACPClient) Listen(ctx context.Context, handler func(*ACPMessage)) error
 		default:
 		}
 
-		// Read line using shared reader (avoids conflict with sendRequest)
-		*lineBufPtr = (*lineBufPtr)[:0] // Reset buffer
 		line, err := reader.ReadBytes('\n')
 		if err != nil {
 			if err == io.EOF {
@@ -339,10 +309,19 @@ func (c *ACPClient) Stop() error {
 		}
 	}
 
-	// Close session store
+	if c.stdin != nil {
+		c.stdin.Close()
+		c.stdin = nil
+	}
+
+	if c.stdout != nil {
+		c.stdout.Close()
+		c.stdout = nil
+	}
+
 	if c.sessionStore != nil {
 		if err := c.sessionStore.Close(); err != nil {
-			util.DebugLog("[DEBUG] ACP session store close failed: %v", err)
+			util.WarnLog("[WARN] ACP session store close failed: %v", err)
 		}
 	}
 
@@ -379,53 +358,25 @@ func (c *ACPClient) SetNotificationHandler(handler func(*ACPMessage)) {
 	c.notificationHandler = handler
 }
 
-// acpResponsePool - Pool for reusing response maps in sendRequest
-// Reduces allocations in response parsing hot path
-var acpResponsePool = sync.Pool{
-	New: func() interface{} {
-		return make(map[string]interface{}, 8)
-	},
-}
-
-// sendRequestTimeout - Default timeout for ACP requests
 const sendRequestTimeout = 30 * time.Second
 
-// maxReadAttempts - Maximum read attempts before timeout (prevents infinite loops)
-// 30 attempts with typical read latency = ~3-5 seconds, well within sendRequestTimeout
-const maxReadAttempts = 30
-
-// sendRequest - Send ACP request and read response (handles notifications)
-// Uses pooled maps to reduce allocations, handles notifications that arrive before responses
-// Optimized 2026-02-24: Pre-cache handler/reader, eliminate redundant JSON marshal for result passthrough
-// Further optimized 2026-02-24 11:00: Reduced allocations in notification handling
-// Optimization 2026-02-24 14:00: Use pooled ID allocation, reduce map operations
-// Performance: ~3-8μs per request (dominated by I/O and JSON parsing)
 func (c *ACPClient) sendRequest(method string, params interface{}, result interface{}) error {
 	c.mu.Lock()
 	c.seq++
 	id := c.seq
 
-	// Pre-cache reader and handler before releasing lock (avoids repeated field access in loop)
 	reader := c.reader
 	handler := c.notificationHandler
 	c.mu.Unlock()
 
-	// Build request message using pool (outside lock for better concurrency)
-	msg := acpRequestPool.Get().(map[string]interface{})
-	msg["jsonrpc"] = "2.0"
-	// Use pooled ID to avoid allocation (optimization for high-frequency requests)
-	idPtr := acpIDPool.Get().(*int64)
-	*idPtr = id
-	msg["id"] = idPtr
-	msg["method"] = method
-	msg["params"] = params
+	msg := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"method":  method,
+		"params":  params,
+	}
 
 	data, err := json.Marshal(msg)
-	// Return ID to pool after marshaling (ID is copied to JSON)
-	acpIDPool.Put(idPtr)
-	clear(msg)
-	acpRequestPool.Put(msg)
-
 	if err != nil {
 		return fmt.Errorf("ACP marshal error (method=%s): %w", method, err)
 	}
@@ -434,7 +385,6 @@ func (c *ACPClient) sendRequest(method string, params interface{}, result interf
 		return fmt.Errorf("ACP write error (method=%s): stdin closed", method)
 	}
 
-	// Fast path: no result needed (fire-and-forget)
 	if result == nil {
 		return nil
 	}
@@ -443,23 +393,16 @@ func (c *ACPClient) sendRequest(method string, params interface{}, result interf
 		return fmt.Errorf("ACP reader not initialized")
 	}
 
-	lineBufPtr := acpLineBufPool.Get().(*[]byte)
-	defer acpLineBufPool.Put(lineBufPtr)
-
-	response := acpResponsePool.Get().(map[string]interface{})
-	defer func() { clear(response); acpResponsePool.Put(response) }()
-
 	ctx, cancel := context.WithTimeout(context.Background(), sendRequestTimeout)
 	defer cancel()
 
-	for readCount := 0; readCount < maxReadAttempts; readCount++ {
+	for {
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("ACP timeout (method=%s): %w", method, ctx.Err())
 		default:
 		}
 
-		*lineBufPtr = (*lineBufPtr)[:0]
 		line, err := reader.ReadBytes('\n')
 		if err != nil {
 			if err == io.EOF {
@@ -475,21 +418,17 @@ func (c *ACPClient) sendRequest(method string, params interface{}, result interf
 			continue
 		}
 
-		clear(response)
+		var response map[string]interface{}
 		if err := json.Unmarshal(line, &response); err != nil {
 			return fmt.Errorf("ACP parse error (method=%s)", method)
 		}
 
-		// Handle notification (no id field) - optimized fast path
-		// Further optimized 2026-02-24: Avoid JSON marshal for notification params when possible
 		idVal, hasID := response["id"]
 		if !hasID || idVal == nil {
 			if handler != nil {
 				if methodVal, ok := response["method"].(string); ok {
-					// Optimized: pass raw params without marshaling (handler can unmarshal if needed)
 					notif := ACPMessage{Method: methodVal}
 					if paramsRaw, ok := response["params"]; ok {
-						// Lazy marshal - only marshal if handler actually needs it
 						notif.Params, _ = json.Marshal(paramsRaw)
 					}
 					handler(&notif)
@@ -498,12 +437,10 @@ func (c *ACPClient) sendRequest(method string, params interface{}, result interf
 			continue
 		}
 
-		// Check if this is our response (float64 comparison for JSON numbers)
 		if respID, ok := idVal.(float64); !ok || respID != float64(id) {
 			continue
 		}
 
-		// Handle error response - optimized with early return
 		if errMsg, ok := response["error"]; ok && errMsg != nil {
 			if errMap, ok := errMsg.(map[string]interface{}); ok {
 				return fmt.Errorf("ACP error (method=%s, code=%d): %s", method,
@@ -512,17 +449,13 @@ func (c *ACPClient) sendRequest(method string, params interface{}, result interf
 			return fmt.Errorf("ACP error (method=%s): %v", method, errMsg)
 		}
 
-		// Handle successful response - optimized: direct type assertion when result is map
 		if respResult, ok := response["result"]; ok && respResult != nil {
-			// Fast path: if result is already the target type, use direct assignment
 			if resultPtr, ok := result.(*map[string]interface{}); ok {
 				if resultMap, ok := respResult.(map[string]interface{}); ok {
-					// Direct copy avoids marshal/unmarshal overhead
 					*resultPtr = util.CloneMap(resultMap)
 					return nil
 				}
 			}
-			// Fallback: generic unmarshal for other types
 			resultData, err := json.Marshal(respResult)
 			if err != nil {
 				return fmt.Errorf("ACP result marshal error (method=%s): %w", method, err)
@@ -534,8 +467,6 @@ func (c *ACPClient) sendRequest(method string, params interface{}, result interf
 
 		return nil
 	}
-
-	return fmt.Errorf("ACP timeout (method=%s): no response after %d reads", method, maxReadAttempts)
 }
 
 // Note: setReadDeadline removed - was a no-op since pipes don't support deadlines

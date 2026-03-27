@@ -857,7 +857,7 @@ type acpSessionReader struct {
 func ACPSessionReader(sessionDir, provider string) SessionReader {
 	store, err := NewACPSessionStore(sessionDir, provider)
 	if err != nil {
-		util.DebugLog("[DEBUG] ACPSessionReader: failed to create store: %v", err)
+		util.WarnLog("[WARN] ACPSessionReader: failed to create store: %v", err)
 		return nil
 	}
 	return &acpSessionReader{

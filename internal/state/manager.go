@@ -122,33 +122,6 @@ const (
 	EnvMaxCacheAge       = "OPENPAL_CACHE_MAX_AGE_MINUTES"
 )
 
-// cleanupCacheIdxSlicePool - Pool for reusable index slices in CleanupCache
-// Optimized: reduces allocations during LRU eviction sorting (covers 99% of cases with 64 capacity)
-var cleanupCacheIdxSlicePool = sync.Pool{
-	New: func() interface{} {
-		slice := make([]int, 0, 64)
-		return &slice
-	},
-}
-
-// cleanupCacheStringSlicePool - Pool for reusable string slices in CleanupCache
-// Optimized: reduces allocations for task ID collections during LRU eviction
-var cleanupCacheStringSlicePool = sync.Pool{
-	New: func() interface{} {
-		slice := make([]string, 0, 64)
-		return &slice
-	},
-}
-
-// cleanupCacheTimeSlicePool - Pool for reusable time.Time slices in CleanupCache
-// Optimized: reduces allocations for lastAccess time collections during LRU eviction
-var cleanupCacheTimeSlicePool = sync.Pool{
-	New: func() interface{} {
-		slice := make([]time.Time, 0, 64)
-		return &slice
-	},
-}
-
 // parseEnvInt - Parse integer from environment variable with default
 func parseEnvInt(key string, defaultValue int) int {
 	if val := os.Getenv(key); val != "" {
@@ -687,23 +660,9 @@ type cacheEntry struct {
 	lastAccess time.Time
 }
 
-// cacheEntrySlicePool - Pool for reusable cacheEntry slices in CleanupCache
-// Optimized: reduces allocations by pooling struct slices instead of parallel slices
-var cacheEntrySlicePool = sync.Pool{
-	New: func() interface{} {
-		slice := make([]cacheEntry, 0, 64)
-		return &slice
-	},
-}
-
 // CleanupCache - Remove expired caches (age-based + LRU eviction)
-// Optimized 2026-02-24 10:12: Use single struct slice instead of 3 parallel slices
 // Two-phase eviction (age-based first, then LRU), stack allocation for common cases
 // Skip cleanup if cache pressure is low (<25% of max) for better efficiency
-//
-// Performance: zero allocations for <=16 caches (covers 95%+ of scenarios)
-// - Stack allocation for tiny caches (<=16): zero allocation, no pool overhead
-// - Pool allocation for medium caches (17-64): zero allocation after warmup
 // - Heap allocation for large caches (>64): rare case
 //
 // Improvement: Memory-based LRU eviction instead of time-based
@@ -770,20 +729,12 @@ func (m *Manager) CleanupCache() int {
 			memory     int64
 		}
 
-		// Stack allocation for tiny caches, pool for medium, heap for large
+		// Stack allocation for tiny caches, heap for larger ones
 		var stackEntries [16]cacheEntry
 		var entries []cacheEntry
 
 		if remaining <= 16 {
 			entries = stackEntries[:0]
-		} else if remaining <= 64 {
-			entriesPtr := cacheEntrySlicePool.Get().(*[]cacheEntry)
-			entries = *entriesPtr
-			entries = entries[:0]
-			defer func() {
-				*entriesPtr = entries
-				cacheEntrySlicePool.Put(entriesPtr)
-			}()
 		} else {
 			entries = make([]cacheEntry, 0, remaining)
 		}

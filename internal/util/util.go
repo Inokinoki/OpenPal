@@ -5,10 +5,9 @@ import (
 	"log"
 	"os"
 	"strings"
-	"sync"
 )
 
-// DebugLogger - Zero-overhead debug logger using function pointer optimization
+// DebugLogger - Debug logger using function pointer optimization
 // When debug is disabled, debugLog is a no-op function (no conditional check, no variadic allocation)
 // When debug is enabled, it calls log.Printf
 var debugLog func(format string, args ...interface{})
@@ -29,38 +28,17 @@ func DebugLog(format string, args ...interface{}) {
 	debugLog(format, args...)
 }
 
+// WarnLog - Always-on warning/error logger
+// Unlike DebugLog, this is NOT controlled by PAL_DEBUG and always outputs.
+// Use for non-fatal but important issues: data loss, degraded operation, unexpected states.
+func WarnLog(format string, args ...interface{}) {
+	log.Printf(format, args...)
+}
+
 // SetDebugLog - Override debug logger (useful for testing or custom loggers)
 // Allows injecting custom debug logger (e.g., for tests or structured logging)
 func SetDebugLog(fn func(format string, args ...interface{})) {
 	debugLog = fn
-}
-
-// lineBufferPool - Pool for reusable line buffers
-// Reduces allocations in hot paths that process line-by-line data
-var lineBufferPool = sync.Pool{
-	New: func() interface{} {
-		buf := make([]byte, 0, 4096)
-		return &buf
-	},
-}
-
-// mapPool - Pool for reusable maps in clone operations
-// Reduces GC pressure in high-frequency cloning scenarios
-var mapPool = sync.Pool{
-	New: func() interface{} {
-		return make(map[string]interface{}, 8)
-	},
-}
-
-// GetLineBuffer - Get a line buffer from pool
-func GetLineBuffer() *[]byte {
-	return lineBufferPool.Get().(*[]byte)
-}
-
-// PutLineBuffer - Return line buffer to pool
-func PutLineBuffer(buf *[]byte) {
-	*buf = (*buf)[:0] // Reset length
-	lineBufferPool.Put(buf)
 }
 
 // ParseTextOutput - Shared text output parser for all adapters
@@ -114,27 +92,12 @@ func ParseTextOutput(line string) map[string]interface{} {
 }
 
 // CloneMap - Deep clone a map[string]interface{}
-// Uses sync.Pool for reduced allocations, with fast path for small maps (<=2 elements)
-// Optimized 2026-02-24 04:30: Use built-in clear() for Go 1.21+ (faster than manual loop)
 func CloneMap(src map[string]interface{}) map[string]interface{} {
 	if src == nil {
 		return nil
 	}
 
-	// Fast path: small maps use direct allocation (avoids pool overhead for tiny maps)
-	if len(src) <= 2 {
-		dst := make(map[string]interface{}, len(src))
-		for k, v := range src {
-			dst[k] = CloneMapInterface(v)
-		}
-		return dst
-	}
-
-	// Get map from pool to reduce allocations for larger maps
-	dst := mapPool.Get().(map[string]interface{})
-	// Clear any existing data (use built-in clear() for Go 1.21+)
-	clear(dst)
-
+	dst := make(map[string]interface{}, len(src))
 	for k, v := range src {
 		dst[k] = CloneMapInterface(v)
 	}
@@ -273,26 +236,6 @@ func SafeClose(ch chan interface{}) {
 	}
 }
 
-// ClearMap - Clear all keys from a map for pool reuse
-// Optimized: avoids allocation by reusing existing map capacity
-// Use this before returning maps to sync.Pool to prevent data leakage
-// Enhanced: uses built-in clear() for Go 1.21+ (faster than manual loop)
-func ClearMap(m map[string]interface{}) {
-	if len(m) == 0 {
-		return // Fast path: nothing to clear
-	}
-	// Use built-in clear() for Go 1.21+ (optimized in stdlib)
-	// Fallback to manual loop for older Go versions
-	clear(m)
-}
-
-// ClearSlice - Clear a slice for pool reuse (sets length to 0, keeps capacity)
-// Optimized: avoids allocation by reusing existing slice capacity
-// Use this before returning slices to sync.Pool to prevent data leakage
-func ClearSlice[T any](s []T) []T {
-	return s[:0]
-}
-
 // GetString - Safely extract string from map
 // Returns empty string if key doesn't exist or value is not a string
 // Use this for safe JSON response parsing
@@ -382,20 +325,7 @@ func GetStringOrDefault(m map[string]interface{}, key, defaultValue string) stri
 	return defaultValue
 }
 
-// JSONBufferPool - Pool for JSON marshal buffers (4KB initial size)
-// Reduces allocations in JSON-heavy operations
-var JSONBufferPool = sync.Pool{
-	New: func() interface{} {
-		buf := make([]byte, 0, 4096)
-		return &buf
-	},
-}
-
-// MarshalJSONWithPool - Marshal JSON with reduced allocations
-// Uses standard json.Marshal (which is highly optimized in Go stdlib)
-// The pool is available for future encoder-based optimizations
-func MarshalJSONWithPool(v interface{}) ([]byte, error) {
-	// Go's json.Marshal is already highly optimized
-	// Pool infrastructure is in place for future encoder-based optimization
+// MarshalJSON - Marshal JSON using standard library
+func MarshalJSON(v interface{}) ([]byte, error) {
 	return json.Marshal(v)
 }

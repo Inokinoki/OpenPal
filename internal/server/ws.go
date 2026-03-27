@@ -40,6 +40,9 @@ const (
 	maxBroadcastBatchSize = 64 // Max clients per broadcast batch
 	defaultClientCapacity = 16 // Default client map capacity
 
+	// Input validation limits
+	maxDeviceIDLength = 128
+
 	// Custom WebSocket close codes (4000-4999 range for private use)
 	CloseCodeQueueOverflow = 4001 // Broadcast or input queue overflow
 	CloseCodeMaxClients    = 4002 // Maximum clients limit reached
@@ -141,6 +144,46 @@ func (c *WebSocketClient) GetReconnectCount() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.ReconnectCount
+}
+
+const (
+	maxContentLength = 100000
+	maxCommandLength = 100
+)
+
+func validateCommand(cmd string) bool {
+	if len(cmd) > maxCommandLength {
+		return false
+	}
+	
+	allowedCommands := map[string]bool{
+		"heartbeat":    true,
+		"send_input":   true,
+		"start_task":   true,
+		"cancel":       true,
+		"get_status":   true,
+		"approve":      true,
+		"reject":       true,
+	}
+	
+	return allowedCommands[cmd]
+}
+
+func validateContent(content string) bool {
+	if len(content) > maxContentLength {
+		return false
+	}
+	
+	for _, r := range content {
+		if r < 32 && r != '\n' && r != '\r' && r != '\t' {
+			return false
+		}
+		if r > 0x10FFFF {
+			return false
+		}
+	}
+	
+	return true
 }
 
 var upgrader = websocket.Upgrader{
@@ -390,7 +433,7 @@ func (s *WebSocketServer) Stop() error {
 		select {
 		case err := <-done:
 			if err != nil {
-				util.DebugLog("[DEBUG] Warning: CLI stop error: %v", err)
+				util.WarnLog("[WARN] session cleanup: CLI stop error: %v", err)
 			}
 		case <-time.After(5 * time.Second):
 			util.DebugLog("[DEBUG] Warning: CLI stop timeout")
@@ -430,7 +473,7 @@ func (s *WebSocketServer) errorHandler() {
 
 	for err := range s.errorCh {
 		if err != nil {
-			util.DebugLog("[DEBUG] Server error: %v", err)
+			util.WarnLog("[WARN] Server error: %v", err)
 
 			// Direct allocation (errors are infrequent, pool not needed)
 			s.stateMgr.AddOutput(s.taskID, state.Event{
@@ -461,28 +504,12 @@ func (s *WebSocketServer) heartbeatChecker() {
 	}
 }
 
-// deviceIDSlicePool - Pool for reusable string slices in checkHeartbeat
-// Optimized: reduces allocations in the periodic heartbeat checker (called every 10s)
-var deviceIDSlicePool = sync.Pool{
-	New: func() interface{} {
-		slice := make([]string, 0, 4) // Typical case: 0-2 timeouts
-		return &slice
-	},
-}
-
 // checkHeartbeat CheckClientheartbeat
-// Optimized: direct field access, batch disconnects to reduce lock contention
-// Uses snapshot approach to minimize lock hold time during disconnects
-// Uses sync.Pool for toDisconnect slice (eliminates allocation entirely)
-// Performance: ~1-5μs per check for typical workloads (0-2 timeouts)
 func (s *WebSocketServer) checkHeartbeat() {
 	now := time.Now()
 	timeoutThreshold := now.Add(-2 * HeartbeatInterval)
 
-	// Get slice from pool (zero allocation for typical case)
-	toDisconnectPtr := deviceIDSlicePool.Get().(*[]string)
-	*toDisconnectPtr = (*toDisconnectPtr)[:0] // Reset length
-	defer deviceIDSlicePool.Put(toDisconnectPtr)
+	var toDisconnect []string
 
 	// Phase 1: Snapshot clients to disconnect (minimize lock hold time)
 	s.mu.RLock()
@@ -499,15 +526,15 @@ func (s *WebSocketServer) checkHeartbeat() {
 
 		// Check if timeout exceeded (fast comparison)
 		if lastActive.Before(timeoutThreshold) {
-			*toDisconnectPtr = append(*toDisconnectPtr, deviceID)
+			toDisconnect = append(toDisconnect, deviceID)
 		}
 	}
 	s.mu.RUnlock()
 
 	// Phase 2: Disconnect outside of read lock (reduces contention)
 	// Only log if there are clients to disconnect (reduces log noise)
-	if len(*toDisconnectPtr) > 0 {
-		for _, deviceID := range *toDisconnectPtr {
+	if len(toDisconnect) > 0 {
+		for _, deviceID := range toDisconnect {
 			s.removeClient(deviceID)
 		}
 	}
@@ -530,38 +557,11 @@ func (s *WebSocketServer) ForwardOutput(stdout, stderr io.Reader) {
 	}()
 }
 
-// eventDataPool - Pool for reusing event data maps (reduces GC pressure)
-var eventDataPool = sync.Pool{
-	New: func() interface{} {
-		return make(map[string]interface{}, 4)
-	},
-}
-
-// forwardStreamBufPool - Pool for scanner buffers (4KB initial, 1MB max)
-// Consolidated: replaces lineStringPool and lineBufPool to reduce memory fragmentation
-var forwardStreamBufPool = sync.Pool{
-	New: func() interface{} {
-		buf := make([]byte, 4096)
-		return &buf
-	},
-}
-
 // forwardStream - Forward CLI output to state manager and broadcast channel
-// Optimized: reduced allocations, early exits, minimal debug logging
-// Enhanced: fast path for empty lines, reduced time.Now() calls, optimized JSON parsing
-// Optimization 2026-02-24 03:23: removed verbose start/exit logs (noise reduction)
-// Optimization 2026-02-24 03:44: Added line length check before byte access (prevents panic on malformed input)
-// Optimization 2026-02-24 05:44: Removed redundant debug logs in hot path (zero overhead)
-// Enhancement 2026-02-24: Extract and save Claude session ID from output
-// Purely in-memory: no file persistence, all data cached in state manager
-// Enhanced 2026-03-19: Set provider and session ID in state manager for recovery
 func (s *WebSocketServer) forwardStream(reader io.Reader, eventType string) {
 	scanner := bufio.NewScanner(reader)
 	const maxCapacity = 1024 * 1024
-
-	bufPtr := forwardStreamBufPool.Get().(*[]byte)
-	defer forwardStreamBufPool.Put(bufPtr)
-	scanner.Buffer(*bufPtr, maxCapacity)
+	scanner.Buffer(make([]byte, 4096), maxCapacity)
 
 	// Fast path: cache frequently accessed fields (reduces struct dereferences)
 	stateMgr := s.stateMgr
@@ -636,7 +636,7 @@ func (s *WebSocketServer) forwardStream(reader io.Reader, eventType string) {
 			event.Data = map[string]interface{}{"content": string(line)}
 
 			if err := stateMgr.AddOutput(taskID, event); err != nil {
-				util.DebugLog("forwardStream: add output error: %v", err)
+				util.WarnLog("[WARN] forwardStream: add output error: %v", err)
 			}
 
 			// Non-blocking broadcast
@@ -648,21 +648,17 @@ func (s *WebSocketServer) forwardStream(reader io.Reader, eventType string) {
 			continue
 		}
 
-		// Parse JSON with pooled map (for JSON-formatted output)
-		eventData := eventDataPool.Get().(map[string]interface{})
+		eventData := make(map[string]interface{}, 4)
 		if err := json.Unmarshal(line, &eventData); err != nil {
-			// Parse failed, treat as plain text
 			eventData["content"] = string(line)
 		}
 
-		// Create and submit event
 		event.Type = eventType
 		event.Timestamp = now.UnixMilli()
 		event.Data = state.CloneEventDataForForward(eventData)
-		eventDataPool.Put(eventData)
 
 		if err := stateMgr.AddOutput(taskID, event); err != nil {
-			util.DebugLog("forwardStream: add output error: %v", err)
+			util.WarnLog("[WARN] forwardStream: add output error: %v", err)
 		}
 
 		// Non-blocking broadcast
@@ -680,58 +676,38 @@ func (s *WebSocketServer) forwardStream(reader io.Reader, eventType string) {
 
 // Uses state.CloneEventDataForForward from manager.go to eliminate code duplication
 
-// linesSlicePool - Pool for reusable line slices in splitLines
-// Optimized: reduces allocations in test scenarios that call splitLines frequently
-var linesSlicePool = sync.Pool{
-	New: func() interface{} {
-		slice := make([][]byte, 0, 8)
-		return &slice
-	},
-}
-
 // splitLines - Split byte slice into lines (used by tests)
-// Fixed: correctly handles trailing newline (doesn't create extra empty line)
-// Optimized: uses sync.Pool for result slice, avoids copy when caller can consume immediately
-// Note: Returns pooled slice - caller must NOT modify or hold reference after use
-// For test scenarios where copy is needed, use splitLinesCopy()
 func splitLines(data []byte) [][]byte {
 	if len(data) == 0 {
 		return nil
 	}
 
-	// Get slice from pool
-	linesPtr := linesSlicePool.Get().(*[][]byte)
-	*linesPtr = (*linesPtr)[:0] // Reset length
+	var lines [][]byte
 
 	start := 0
 	for i := 0; i < len(data); i++ {
 		if data[i] == '\n' {
-			*linesPtr = append(*linesPtr, data[start:i])
+			lines = append(lines, data[start:i])
 			start = i + 1
 		}
 	}
-	// Add last line only if non-empty (trailing newline doesn't create extra line)
 	if start < len(data) {
-		*linesPtr = append(*linesPtr, data[start:])
+		lines = append(lines, data[start:])
 	}
 
-	return *linesPtr
+	return lines
 }
 
 // splitLinesCopy - Split byte slice into lines with owned copy (for tests that need persistence)
-// Uses splitLines internally, then copies result for caller ownership
 func splitLinesCopy(data []byte) [][]byte {
 	lines := splitLines(data)
 	if lines == nil {
 		return nil
 	}
-	// Copy result for caller ownership
 	result := make([][]byte, len(lines))
 	for i, line := range lines {
 		result[i] = append([]byte(nil), line...)
 	}
-	// Return pooled slice
-	linesSlicePool.Put(&lines)
 	return result
 }
 
@@ -743,12 +719,12 @@ func (s *WebSocketServer) handleWebSocket(w http.ResponseWriter, r *http.Request
 			current := atomic.LoadInt64(&s.stats.currentConnections)
 			if current >= s.maxClients {
 				http.Error(w, fmt.Sprintf("Maximum clients (%d) reached", s.maxClients), http.StatusServiceUnavailable)
-				util.DebugLog("[DEBUG] handleWebSocket: max clients limit exceeded (current=%d, max=%d)", current, s.maxClients)
+				util.WarnLog("[WARN] handleWebSocket: max clients limit exceeded (current=%d, max=%d)", current, s.maxClients)
 				return
 			}
 		}
 		http.Error(w, "Connection rate limit exceeded", http.StatusTooManyRequests)
-		util.DebugLog("[DEBUG] handleWebSocket: connection rate limited")
+		util.WarnLog("[WARN] handleWebSocket: connection rate limited")
 		return
 	}
 
@@ -769,6 +745,9 @@ func (s *WebSocketServer) handleWebSocket(w http.ResponseWriter, r *http.Request
 	deviceID := r.URL.Query().Get("device")
 	if deviceID == "" {
 		deviceID = generateDeviceID()
+	} else if len(deviceID) > maxDeviceIDLength {
+		http.Error(w, "Device ID too long", http.StatusBadRequest)
+		return
 	}
 
 	// CreateClient
@@ -890,19 +869,6 @@ func (s *WebSocketServer) sendHistory(conn *websocket.Conn, deviceID string) {
 	}
 }
 
-// clientMsgPool - Pool for reusing ClientMessage structs in listen
-// Optimized: reduces allocations in message parsing hot path
-// Enhanced: uses util.ClearMap for efficient pool reuse
-var clientMsgPool = sync.Pool{
-	New: func() interface{} {
-		return &ClientMessage{
-			Data: make(map[string]interface{}, 4),
-		}
-	},
-}
-
-// Events are created inline in broadcastToClients to avoid pool overhead for single-event broadcasts
-
 func (s *WebSocketServer) listen(client *WebSocketClient) {
 	defer func() {
 		s.wg.Done()
@@ -910,7 +876,7 @@ func (s *WebSocketServer) listen(client *WebSocketClient) {
 	}()
 
 	lastSeq := int64(0)
-	deviceID := client.DeviceID // Cache deviceID to avoid repeated struct access
+	deviceID := client.DeviceID
 
 	for {
 		select {
@@ -922,10 +888,8 @@ func (s *WebSocketServer) listen(client *WebSocketClient) {
 		client.Conn.SetReadDeadline(time.Now().Add(PongTimeout))
 		_, message, err := client.Conn.ReadMessage()
 		if err != nil {
-			// Mark client as closed immediately to stop ping goroutine
 			client.SetClosed()
 
-			// Try reconnect (check reconnect count directly to avoid method call)
 			if s.config.ReconnectEnabled {
 				client.mu.RLock()
 				reconnectCount := client.ReconnectCount
@@ -939,30 +903,22 @@ func (s *WebSocketServer) listen(client *WebSocketClient) {
 
 		client.UpdateActivity()
 
-		// Get message from pool to reduce allocations
-		msg := clientMsgPool.Get().(*ClientMessage)
-
-		if err := json.Unmarshal(message, msg); err != nil {
-			// Return to pool before continue
-			msg.Command = ""
-			util.ClearMap(msg.Data)
-			clientMsgPool.Put(msg)
+		var msg ClientMessage
+		if err := json.Unmarshal(message, &msg); err != nil {
 			continue
 		}
 
-		// Handle command (pass pointer to avoid copy)
-		s.handleCommand(msg, client)
+		if !validateCommand(msg.Command) {
+			continue
+		}
 
-		// Return to pool after handling
-		msg.Command = ""
-		util.ClearMap(msg.Data)
-		clientMsgPool.Put(msg)
+		s.handleCommand(&msg, client)
 
 		// Update device sequence
 		lastSeq++
 		if err := s.stateMgr.UpdateDeviceSeq(s.taskID, deviceID, lastSeq); err != nil {
 			// Log but don't fail on sequence update errors (non-critical)
-			util.DebugLog("[DEBUG] listen: failed to update device seq: %v", err)
+			util.WarnLog("[WARN] listen: failed to update device seq: %v", err)
 		}
 	}
 }
@@ -1141,9 +1097,6 @@ func (s *WebSocketServer) processInputQueue() {
 }
 
 // sendToCLI - Send message to CLI stdin
-// Optimized: direct allocation eliminates pool overhead for infrequent calls (~1-10/sec)
-// Go's allocator is highly optimized for small objects; sync.Pool mutex overhead outweighs benefits
-// Performance: ~40-80ns per message (dominated by JSON marshal and I/O)
 func (s *WebSocketServer) sendToCLI(inputMsg InputMessage) {
 	// Single mutex-protected check for CLI state
 	s.mu.RLock()
@@ -1174,7 +1127,7 @@ func (s *WebSocketServer) sendToCLI(inputMsg InputMessage) {
 	n, err := cli.Stdin.Write(writeBuf)
 
 	if err != nil {
-		util.DebugLog("[DEBUG] sendToCLI: write failed (wrote=%d/%d): %v", n, len(data), err)
+		util.WarnLog("[WARN] sendToCLI: write failed (wrote=%d/%d): %v", n, len(data), err)
 		return
 	}
 
@@ -1228,6 +1181,15 @@ func handleHeartbeat(s *WebSocketServer, msg *ClientMessage, client *WebSocketCl
 // Optimization 2026-02-24 13:00: Consistent pointer usage for msg parameter
 func handleStartTask(s *WebSocketServer, msg *ClientMessage, client *WebSocketClient) {
 	if task, ok := msg.Data["task"].(string); ok {
+		if !validateContent(task) {
+			s.sendToClient(client.DeviceID, map[string]interface{}{
+				"type": "error",
+				"data": map[string]interface{}{
+					"message": "Invalid task content",
+				},
+			})
+			return
+		}
 		s.queueInputWithLogging("task", task)
 	}
 }
@@ -1236,6 +1198,15 @@ func handleStartTask(s *WebSocketServer, msg *ClientMessage, client *WebSocketCl
 // Optimization 2026-02-24 13:00: Consistent pointer usage for msg parameter
 func handleSendInput(s *WebSocketServer, msg *ClientMessage, client *WebSocketClient) {
 	if content, ok := msg.Data["content"].(string); ok {
+		if !validateContent(content) {
+			s.sendToClient(client.DeviceID, map[string]interface{}{
+				"type": "error",
+				"data": map[string]interface{}{
+					"message": "Invalid input content",
+				},
+			})
+			return
+		}
 		s.queueInputWithLogging("input", content)
 	}
 }
@@ -1270,7 +1241,7 @@ func handleCancel(s *WebSocketServer, msg *ClientMessage, client *WebSocketClien
 			cliPID = s.cli.Pid
 			util.DebugLog("[DEBUG] handleCancel: stopping CLI (PID: %d, drained=%d)", cliPID, drained)
 			if err := s.cli.Stop(); err != nil {
-				util.DebugLog("[DEBUG] handleCancel: CLI stop error: %v", err)
+				util.WarnLog("[WARN] handleCancel: CLI stop error: %v", err)
 			}
 			s.cli = nil
 		}
@@ -1280,7 +1251,7 @@ func handleCancel(s *WebSocketServer, msg *ClientMessage, client *WebSocketClien
 
 	// Update task status to stopped (separate lock, but UpdateStatus is fast)
 	if err := s.stateMgr.UpdateStatus(s.taskID, "stopped"); err != nil {
-		util.DebugLog("[DEBUG] handleCancel: failed to update status: %v", err)
+		util.WarnLog("[WARN] handleCancel: failed to update status: %v", err)
 	}
 
 	// Send confirmation to client
@@ -1693,24 +1664,6 @@ func (s *WebSocketServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
-// metricsBuilderPool - Pool for reusable strings.Builder in handleMetrics
-// Optimized: reduces allocations in metrics endpoint (called frequently by monitoring systems)
-var metricsBuilderPool = sync.Pool{
-	New: func() interface{} {
-		b := new(strings.Builder)
-		b.Grow(4096) // Pre-allocate for typical metrics response
-		return b
-	},
-}
-
-// metricsNumBufPool - Pool for reusable number format buffers in handleMetrics
-// Optimized: reduces allocations when formatting numbers for Prometheus metrics
-var metricsNumBufPool = sync.Pool{
-	New: func() interface{} {
-		return make([]byte, 0, 32)
-	},
-}
-
 // metricsHeadersStatic - Pre-built HELP+TYPE headers as single concatenated string
 // Optimized 2026-02-24: Eliminates map lookup overhead entirely, single string write
 // All metric headers are static - concatenate once at startup, write as single block
@@ -1782,7 +1735,6 @@ const (
 )
 
 // handleMetrics - Prometheus-style metrics endpoint
-// Optimized: sync.Pool for Builder/buffers, strconv instead of fmt.Fprintf, pre-built headers
 func (s *WebSocketServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	cli := s.cli
@@ -1818,12 +1770,10 @@ func (s *WebSocketServer) handleMetrics(w http.ResponseWriter, r *http.Request) 
 		totalEvents, _ = stats["total_events"].(int)
 	}
 
-	sb := metricsBuilderPool.Get().(*strings.Builder)
-	sb.Reset()
-	defer metricsBuilderPool.Put(sb)
+	var sb strings.Builder
+	sb.Grow(4096)
 
-	numBuf := metricsNumBufPool.Get().([]byte)
-	defer metricsNumBufPool.Put(numBuf)
+	var numBuf [64]byte
 
 	uptimeSecs := time.Since(s.startedAt).Seconds()
 	currentConns := atomic.LoadInt64(&s.stats.currentConnections)
@@ -1836,16 +1786,16 @@ func (s *WebSocketServer) handleMetrics(w http.ResponseWriter, r *http.Request) 
 	writeFloat := func(name string, value float64) {
 		sb.WriteString(name)
 		sb.WriteByte(' ')
-		numBuf = numBuf[:0]
-		sb.Write(strconv.AppendFloat(numBuf, value, 'f', -1, 64))
+		buf := numBuf[:]
+		sb.Write(strconv.AppendFloat(buf, value, 'f', -1, 64))
 		sb.WriteByte('\n')
 	}
 
 	writeInt := func(name string, value int64) {
 		sb.WriteString(name)
 		sb.WriteByte(' ')
-		numBuf = numBuf[:0]
-		sb.Write(strconv.AppendInt(numBuf, value, 10))
+		buf := numBuf[:]
+		sb.Write(strconv.AppendInt(buf, value, 10))
 		sb.WriteByte('\n')
 	}
 
@@ -1858,8 +1808,8 @@ func (s *WebSocketServer) handleMetrics(w http.ResponseWriter, r *http.Request) 
 		sb.WriteString("\",mode=\"")
 		sb.WriteString(cliMode)
 		sb.WriteString("\"} ")
-		numBuf = numBuf[:0]
-		sb.Write(strconv.AppendFloat(numBuf, value, 'f', -1, 64))
+		buf := numBuf[:]
+		sb.Write(strconv.AppendFloat(buf, value, 'f', -1, 64))
 		sb.WriteByte('\n')
 	}
 
@@ -1968,57 +1918,25 @@ func (s *WebSocketServer) queueInputWithLogging(entryType, content string) {
 	default:
 		// Queue full - track dropped message and log warning
 		atomic.AddInt64(&s.stats.inputDropped, 1)
-		util.DebugLog("[DEBUG] queueInputWithLogging: input queue full (depth=%d), dropping message", len(s.inputQueue))
+		util.WarnLog("[WARN] queueInputWithLogging: input queue full (depth=%d), dropping message", len(s.inputQueue))
 	}
 }
 
-// errorBatchPool - Pool for reusing errorBatch instances
-// Optimized: reduces allocations in broadcast error handling
-// Pre-allocates capacity based on typical broadcast scenarios (scales with client count)
-// Note: Capacity of 32 covers 99%+ of scenarios; larger broadcasts are rare
-var errorBatchPool = sync.Pool{
-	New: func() interface{} {
-		return &errorBatch{errors: make([]error, 0, 32)}
-	},
-}
-
 // errorBatch - Batch errors before sending to reduce channel contention
-// Optimized: no mutex needed - only accessed by single goroutine (broadcastToClients)
-// This eliminates lock overhead in the hot path
-// Further optimized 2026-02-24: Inline error sending to reduce function call overhead
 type errorBatch struct {
 	errors []error
 }
 
-// getErrorBatch - Get an errorBatch from pool
-func getErrorBatch() *errorBatch {
-	return errorBatchPool.Get().(*errorBatch)
+func newErrorBatch() *errorBatch {
+	return &errorBatch{errors: make([]error, 0, 32)}
 }
 
-// putErrorBatch - Return errorBatch to pool after use
-// Optimized: clears slice but keeps capacity for reuse
-func putErrorBatch(eb *errorBatch) {
-	// Reset length
-	eb.errors = eb.errors[:0]
-
-	// Cap capacity to prevent memory bloat (32 is sufficient for 99%+ of scenarios)
-	// Rare high-error broadcasts can grow the slice, but we shrink it on return
-	if cap(eb.errors) > 64 {
-		eb.errors = make([]error, 0, 32)
-	}
-
-	errorBatchPool.Put(eb)
-}
-
-// Add - Add error to batch (single-threaded, no lock needed)
-// Optimized: pre-allocated capacity reduces reallocations
+// Add - Add error to batch
 func (eb *errorBatch) Add(err error) {
 	eb.errors = append(eb.errors, err)
 }
 
 // Flush - Send all errors to channel and reset
-// Optimized 2026-02-24: Inlined in broadcastToClients for zero function call overhead
-// This function kept for backward compatibility but not used in hot path
 func (eb *errorBatch) Flush(errorCh chan<- error) {
 	if len(eb.errors) == 0 {
 		return
@@ -2029,5 +1947,4 @@ func (eb *errorBatch) Flush(errorCh chan<- error) {
 		default:
 		}
 	}
-	eb.errors = eb.errors[:0]
 }

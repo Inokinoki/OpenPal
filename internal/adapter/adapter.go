@@ -37,14 +37,30 @@ type CLIProcess struct {
 	Pid    int
 }
 
+func (c *CLIProcess) closePipes() {
+	if c.Stdin != nil {
+		c.Stdin.Close()
+		c.Stdin = nil
+	}
+	if c.Stdout != nil {
+		c.Stdout.Close()
+		c.Stdout = nil
+	}
+	if c.Stderr != nil {
+		c.Stderr.Close()
+		c.Stderr = nil
+	}
+}
+
 // Stop - Stop CLI with graceful shutdown (SIGINT) and timeout fallback
 func (c *CLIProcess) Stop() error {
 	if c.Cmd == nil || c.Cmd.Process == nil {
+		c.closePipes()
 		return nil
 	}
 
 	if err := c.Cmd.Process.Signal(os.Interrupt); err != nil {
-		util.DebugLog("[DEBUG] CLI Stop: interrupt failed: %v, forcing kill", err)
+		util.WarnLog("[WARN] CLI Stop: interrupt failed: %v, forcing kill", err)
 		return c.forceKill()
 	}
 
@@ -53,6 +69,7 @@ func (c *CLIProcess) Stop() error {
 
 	select {
 	case err := <-done:
+		c.closePipes()
 		return err
 	case <-time.After(3 * time.Second):
 		return c.forceKill()
@@ -62,6 +79,7 @@ func (c *CLIProcess) Stop() error {
 // forceKill - Force kill the CLI process and clean up resources
 func (c *CLIProcess) forceKill() error {
 	if c.Cmd == nil || c.Cmd.Process == nil {
+		c.closePipes()
 		return nil
 	}
 
@@ -69,9 +87,7 @@ func (c *CLIProcess) forceKill() error {
 		return fmt.Errorf("force kill failed: %w", err)
 	}
 
-	if c.Stdin != nil {
-		c.Stdin.Close()
-	}
+	c.closePipes()
 
 	// Wait for process exit (500ms timeout)
 	done := make(chan error, 1)
@@ -455,7 +471,7 @@ func (a *ClaudeAdapter) UpdateSessionID(line string) {
 	// Save to in-memory cache if session ID changed
 	if sessionID != oldSessionID && a.sessionManager != nil {
 		if err := a.sessionManager.Save(sessionID); err != nil {
-			util.DebugLog("[DEBUG] ClaudeAdapter: failed to save session ID: %v", err)
+			util.WarnLog("[WARN] ClaudeAdapter: failed to save session ID: %v", err)
 		} else {
 			util.DebugLog("[DEBUG] ClaudeAdapter: saved session ID: %s", sessionID)
 		}

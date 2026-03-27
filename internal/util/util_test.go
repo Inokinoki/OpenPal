@@ -51,59 +51,6 @@ func TestSetDebugLog(t *testing.T) {
 	}
 }
 
-// ============== Line Buffer Pool Tests ==============
-
-// TestGetPutLineBuffer tests line buffer pool get/put
-func TestGetPutLineBuffer(t *testing.T) {
-	// Get buffer from pool
-	buf := GetLineBuffer()
-
-	if buf == nil {
-		t.Fatal("Expected non-nil buffer")
-	}
-
-	if cap(*buf) != 4096 {
-		t.Errorf("Expected buffer capacity 4096, got %d", cap(*buf))
-	}
-
-	// Use buffer
-	*buf = append(*buf, []byte("test data")...)
-
-	if len(*buf) != 9 {
-		t.Errorf("Expected length 9, got %d", len(*buf))
-	}
-
-	// Return to pool
-	PutLineBuffer(buf)
-
-	// Verify reset
-	if len(*buf) != 0 {
-		t.Error("Expected buffer length to be reset after PutLineBuffer")
-	}
-}
-
-// TestLineBufferPoolReuse tests line buffer pool reuse
-func TestLineBufferPoolReuse(t *testing.T) {
-	// Get buffer, use it, return it
-	buf1 := GetLineBuffer()
-	*buf1 = append(*buf1, []byte("first use")...)
-	PutLineBuffer(buf1)
-
-	// Get again - should be same buffer (from pool)
-	buf2 := GetLineBuffer()
-
-	// Length should be reset but capacity preserved
-	if len(*buf2) != 0 {
-		t.Error("Expected reused buffer to have length 0")
-	}
-
-	if cap(*buf2) != 4096 {
-		t.Error("Expected reused buffer to preserve capacity")
-	}
-
-	PutLineBuffer(buf2)
-}
-
 // ============== ParseTextOutput Tests ==============
 
 // TestParseTextOutput tests text output parsing
@@ -496,78 +443,6 @@ func TestSafeCloseWithSelect(t *testing.T) {
 	}
 }
 
-// ============== ClearMap Tests ==============
-
-// TestClearMap tests map clearing
-func TestClearMap(t *testing.T) {
-	m := map[string]interface{}{
-		"key1": "value1",
-		"key2": 42,
-	}
-
-	ClearMap(m)
-
-	if len(m) != 0 {
-		t.Errorf("Expected empty map after ClearMap, got %d elements", len(m))
-	}
-}
-
-// TestClearMapEmpty tests clearing empty map
-func TestClearMapEmpty(t *testing.T) {
-	m := make(map[string]interface{})
-
-	// Should not panic
-	ClearMap(m)
-
-	if len(m) != 0 {
-		t.Error("Expected empty map to remain empty")
-	}
-}
-
-// TestClearMapNil tests clearing nil map
-func TestClearMapNil(t *testing.T) {
-	var nilMap map[string]interface{}
-
-	// Should not panic
-	ClearMap(nilMap)
-
-	if nilMap != nil {
-		t.Error("Expected nil map to remain nil")
-	}
-}
-
-// ============== ClearSlice Tests ==============
-
-// TestClearSlice tests slice clearing
-func TestClearSlice(t *testing.T) {
-	s := []int{1, 2, 3, 4, 5}
-
-	cleared := ClearSlice(s)
-
-	if len(cleared) != 0 {
-		t.Errorf("Expected length 0, got %d", len(cleared))
-	}
-
-	if cap(cleared) != 5 {
-		t.Errorf("Expected capacity 5, got %d", cap(cleared))
-	}
-}
-
-// TestClearSliceEmpty tests clearing empty slice
-func TestClearSliceEmpty(t *testing.T) {
-	s := make([]string, 0, 10)
-
-	cleared := ClearSlice(s)
-
-	if len(cleared) != 0 {
-		t.Errorf("Expected length 0, got %d", len(cleared))
-	}
-
-	if cap(cleared) != 10 {
-		t.Errorf("Expected capacity 10, got %d", cap(cleared))
-	}
-}
-
 // ============== Map Accessor Tests ==============
 
 // TestGetString tests string extraction from map
@@ -758,57 +633,15 @@ func TestGetStringOrDefault(t *testing.T) {
 
 // ============== Pool Tests ==============
 
-// TestMapPool tests map pool functionality
-func TestMapPool(t *testing.T) {
-	// Get map from pool
-	m := mapPool.Get().(map[string]interface{})
-
-	// Use it
-	m["key"] = "value"
-
-	// Clear and return
-	ClearMap(m)
-	mapPool.Put(m)
-
-	// Get again - should be reusable
-	m2 := mapPool.Get().(map[string]interface{})
-	if len(m2) != 0 {
-		t.Error("Expected pooled map to be cleared")
-	}
-}
-
-// TestJSONBufferPool tests JSON buffer pool
-func TestJSONBufferPool(t *testing.T) {
-	// Get buffer
-	buf := JSONBufferPool.Get().(*[]byte)
-
-	if cap(*buf) != 4096 {
-		t.Errorf("Expected buffer capacity 4096, got %d", cap(*buf))
-	}
-
-	// Use it
-	*buf = append(*buf, []byte("json data")...)
-
-	// Return to pool
-	*buf = (*buf)[:0]
-	JSONBufferPool.Put(buf)
-
-	// Get again - should be reusable
-	buf2 := JSONBufferPool.Get().(*[]byte)
-	if len(*buf2) != 0 {
-		t.Error("Expected pooled buffer to be cleared")
-	}
-}
-
-// TestMarshalJSONWithPool tests JSON marshaling
-func TestMarshalJSONWithPool(t *testing.T) {
+// TestMarshalJSON tests JSON marshaling
+func TestMarshalJSON(t *testing.T) {
 	data := map[string]interface{}{
 		"key":  "value",
 		"num":  42,
 		"bool": true,
 	}
 
-	result, err := MarshalJSONWithPool(data)
+	result, err := MarshalJSON(data)
 	if err != nil {
 		t.Fatalf("Failed to marshal JSON: %v", err)
 	}
@@ -827,46 +660,6 @@ func TestMarshalJSONWithPool(t *testing.T) {
 // ============== Concurrent Pool Access Tests ==============
 
 // TestConcurrentLineBufferPool tests concurrent line buffer pool access
-func TestConcurrentLineBufferPool(t *testing.T) {
-	var wg sync.WaitGroup
-	numGoroutines := 10
-
-	for i := 0; i < numGoroutines; i++ {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
-
-			// Get, use, return
-			buf := GetLineBuffer()
-			*buf = append(*buf, []byte("test")...)
-			PutLineBuffer(buf)
-		}(i)
-	}
-
-	wg.Wait()
-}
-
-// TestConcurrentMapPool tests concurrent map pool access
-func TestConcurrentMapPool(t *testing.T) {
-	var wg sync.WaitGroup
-	numGoroutines := 10
-
-	for i := 0; i < numGoroutines; i++ {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
-
-			// Get, use, clear, return
-			m := mapPool.Get().(map[string]interface{})
-			m["key"] = "value"
-			ClearMap(m)
-			mapPool.Put(m)
-		}(i)
-	}
-
-	wg.Wait()
-}
-
 // TestConcurrentCloneMap tests concurrent CloneMap operations
 func TestConcurrentCloneMap(t *testing.T) {
 	original := map[string]interface{}{
