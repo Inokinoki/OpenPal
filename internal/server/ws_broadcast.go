@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -240,4 +241,52 @@ func (s *WebSocketServer) GetClientInfo(deviceID string) (*Device, error) {
 		ReconnectCount:  client.ReconnectCount,
 		LastReconnectAt: client.LastActive.UnixMilli(),
 	}, nil
+}
+
+// errorBatchPool - Pool for reusing errorBatch instances
+// Optimized: reduces allocations in broadcast error handling
+var errorBatchPool = sync.Pool{
+	New: func() interface{} {
+		return &errorBatch{errors: make([]error, 0, 32)}
+	},
+}
+
+// errorBatch - Batch errors before sending to reduce channel contention
+// Optimized: no mutex needed - only accessed by single goroutine (broadcastToClients)
+type errorBatch struct {
+	errors []error
+}
+
+// getErrorBatch - Get an errorBatch from pool
+func getErrorBatch() *errorBatch {
+	return errorBatchPool.Get().(*errorBatch)
+}
+
+// putErrorBatch - Return errorBatch to pool after use
+// Optimized: clears slice but keeps capacity for reuse
+func putErrorBatch(eb *errorBatch) {
+	eb.errors = eb.errors[:0]
+	if cap(eb.errors) > 64 {
+		eb.errors = make([]error, 0, 32)
+	}
+	errorBatchPool.Put(eb)
+}
+
+// Add - Add error to batch (single-threaded, no lock needed)
+func (eb *errorBatch) Add(err error) {
+	eb.errors = append(eb.errors, err)
+}
+
+// Flush - Send all errors to channel and reset
+func (eb *errorBatch) Flush(errorCh chan<- error) {
+	if len(eb.errors) == 0 {
+		return
+	}
+	for _, err := range eb.errors {
+		select {
+		case errorCh <- err:
+		default:
+		}
+	}
+	eb.errors = eb.errors[:0]
 }

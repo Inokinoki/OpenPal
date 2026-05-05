@@ -9,8 +9,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"openpal/internal/util"
 )
 
 // memStatsCache - Cached memory statistics to reduce ReadMemStats calls
@@ -357,109 +355,4 @@ func (s *WebSocketServer) handleMetrics(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	w.Write([]byte(sb.String()))
-}
-
-// deviceIDPrefix - Pre-allocated prefix for device IDs (avoids repeated string concatenation)
-const deviceIDPrefix = "device_"
-
-// deviceIDLetters - Character set for device ID generation (indexed directly for speed)
-const deviceIDLetters = "abcdefghijklmnopqrstuvwxyz0123456789"
-const deviceIDLettersLen = len(deviceIDLetters)
-
-// generateDeviceID - Generate a unique device ID
-// Optimized: uses direct indexing and stack allocation for zero heap allocations in common case
-func generateDeviceID() string {
-	// Stack-allocated buffer for 8-char random suffix (no heap allocation)
-	var buf [8]byte
-	for i := range buf {
-		buf[i] = deviceIDLetters[int(fastRandByte())&31] // &31 = %32, faster for power-of-2
-	}
-	return deviceIDPrefix + string(buf[:])
-}
-
-// queueInputWithLogging - Helper to queue input (purely in-memory, no file logging)
-// Enhanced: non-blocking queue send with overflow protection, queue depth tracking
-// Optimized: single atomic operation for CLI start check (avoids double-check pattern)
-func (s *WebSocketServer) queueInputWithLogging(entryType, content string) {
-	// Non-blocking send to input queue (prevents deadlock if queue is full)
-	inputMsg := InputMessage{
-		Content: content,
-		Type:    entryType,
-	}
-
-	select {
-	case s.inputQueue <- inputMsg:
-		// Successfully queued - start CLI processor if not already started
-		// Optimized: single CompareAndSwap handles both check and set atomically
-		if s.cliAdapter != nil && s.cliStarted.CompareAndSwap(false, true) {
-			go s.processInputQueue()
-		}
-	case <-s.ctx.Done():
-		// Server shutting down, discard message
-		util.DebugLog("[DEBUG] queueInputWithLogging: server shutting down, discarding message")
-	default:
-		// Queue full - track dropped message and log warning
-		atomic.AddInt64(&s.stats.inputDropped, 1)
-		util.DebugLog("[DEBUG] queueInputWithLogging: input queue full (depth=%d), dropping message", len(s.inputQueue))
-	}
-}
-
-// errorBatchPool - Pool for reusing errorBatch instances
-// Optimized: reduces allocations in broadcast error handling
-// Pre-allocates capacity based on typical broadcast scenarios (scales with client count)
-// Note: Capacity of 32 covers 99%+ of scenarios; larger broadcasts are rare
-var errorBatchPool = sync.Pool{
-	New: func() interface{} {
-		return &errorBatch{errors: make([]error, 0, 32)}
-	},
-}
-
-// errorBatch - Batch errors before sending to reduce channel contention
-// Optimized: no mutex needed - only accessed by single goroutine (broadcastToClients)
-// This eliminates lock overhead in the hot path
-// Further optimized 2026-02-24: Inline error sending to reduce function call overhead
-type errorBatch struct {
-	errors []error
-}
-
-// getErrorBatch - Get an errorBatch from pool
-func getErrorBatch() *errorBatch {
-	return errorBatchPool.Get().(*errorBatch)
-}
-
-// putErrorBatch - Return errorBatch to pool after use
-// Optimized: clears slice but keeps capacity for reuse
-func putErrorBatch(eb *errorBatch) {
-	// Reset length
-	eb.errors = eb.errors[:0]
-
-	// Cap capacity to prevent memory bloat (32 is sufficient for 99%+ of scenarios)
-	// Rare high-error broadcasts can grow the slice, but we shrink it on return
-	if cap(eb.errors) > 64 {
-		eb.errors = make([]error, 0, 32)
-	}
-
-	errorBatchPool.Put(eb)
-}
-
-// Add - Add error to batch (single-threaded, no lock needed)
-// Optimized: pre-allocated capacity reduces reallocations
-func (eb *errorBatch) Add(err error) {
-	eb.errors = append(eb.errors, err)
-}
-
-// Flush - Send all errors to channel and reset
-// Optimized 2026-02-24: Inlined in broadcastToClients for zero function call overhead
-// This function kept for backward compatibility but not used in hot path
-func (eb *errorBatch) Flush(errorCh chan<- error) {
-	if len(eb.errors) == 0 {
-		return
-	}
-	for _, err := range eb.errors {
-		select {
-		case errorCh <- err:
-		default:
-		}
-	}
-	eb.errors = eb.errors[:0]
 }

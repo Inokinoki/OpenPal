@@ -31,12 +31,7 @@ const (
 	HeartbeatInterval = 10 * time.Second
 
 	// Performance tuning
-	maxBroadcastBatchSize = 64 // Max clients per broadcast batch
 	defaultClientCapacity = 16 // Default client map capacity
-
-	// Custom WebSocket close codes (4000-4999 range for private use)
-	CloseCodeQueueOverflow = 4001 // Broadcast or input queue overflow
-	CloseCodeMaxClients    = 4002 // Maximum clients limit reached
 )
 
 // fastRand - Fast PRNG for non-cryptographic random generation (device IDs, etc.)

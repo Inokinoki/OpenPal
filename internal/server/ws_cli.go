@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"sync/atomic"
 
 	"openpal/internal/adapter"
 	"openpal/internal/util"
@@ -183,5 +184,32 @@ func (s *WebSocketServer) sendToCLI(inputMsg InputMessage) {
 
 	if n != len(data) {
 		util.DebugLog("[DEBUG] sendToCLI: partial write (wrote=%d/%d)", n, len(data))
+	}
+}
+
+// queueInputWithLogging - Helper to queue input (purely in-memory, no file logging)
+// Enhanced: non-blocking queue send with overflow protection, queue depth tracking
+// Optimized: single atomic operation for CLI start check (avoids double-check pattern)
+func (s *WebSocketServer) queueInputWithLogging(entryType, content string) {
+	// Non-blocking send to input queue (prevents deadlock if queue is full)
+	inputMsg := InputMessage{
+		Content: content,
+		Type:    entryType,
+	}
+
+	select {
+	case s.inputQueue <- inputMsg:
+		// Successfully queued - start CLI processor if not already started
+		// Optimized: single CompareAndSwap handles both check and set atomically
+		if s.cliAdapter != nil && s.cliStarted.CompareAndSwap(false, true) {
+			go s.processInputQueue()
+		}
+	case <-s.ctx.Done():
+		// Server shutting down, discard message
+		util.DebugLog("[DEBUG] queueInputWithLogging: server shutting down, discarding message")
+	default:
+		// Queue full - track dropped message and log warning
+		atomic.AddInt64(&s.stats.inputDropped, 1)
+		util.DebugLog("[DEBUG] queueInputWithLogging: input queue full (depth=%d), dropping message", len(s.inputQueue))
 	}
 }

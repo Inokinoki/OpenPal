@@ -365,3 +365,20 @@ func (s *WebSocketServer) attemptReconnect(client *WebSocketClient) {
 	// New connection with same deviceID will reuse the client object
 	// listen() goroutine will exit, but ping goroutine should have already stopped
 }
+
+// deviceIDPrefix - Pre-allocated prefix for device IDs (avoids repeated string concatenation)
+const deviceIDPrefix = "device_"
+
+// deviceIDLetters - Character set for device ID generation (indexed directly for speed)
+const deviceIDLetters = "abcdefghijklmnopqrstuvwxyz0123456789"
+
+// generateDeviceID - Generate a unique device ID
+// Optimized: uses direct indexing and stack allocation for zero heap allocations in common case
+func generateDeviceID() string {
+	// Stack-allocated buffer for 8-char random suffix (no heap allocation)
+	var buf [8]byte
+	for i := range buf {
+		buf[i] = deviceIDLetters[int(fastRandByte())&31] // &31 = %32, faster for power-of-2
+	}
+	return deviceIDPrefix + string(buf[:])
+}
