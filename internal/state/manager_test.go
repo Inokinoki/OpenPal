@@ -3,6 +3,7 @@ package state
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -19,6 +20,7 @@ func setupTestManager(t *testing.T) (*Manager, string, func()) {
 
 	// Cleanup function
 	cleanup := func() {
+		mgr.Close()
 		os.RemoveAll(tmpDir)
 	}
 
@@ -323,6 +325,53 @@ func TestConcurrentAccess(t *testing.T) {
 	if state.Status != "running" {
 		t.Errorf("Expected status running, got %s", state.Status)
 	}
+}
+
+// TestCloseStopsCleanupLoop - Verify Close() signals cleanupLoop to exit.
+// Prevents goroutine leaks on shutdown.
+func TestCloseStopsCleanupLoop(t *testing.T) {
+	mgr, _, cleanup := setupTestManager(t)
+	defer cleanup()
+
+	// Close should not block and should signal cleanupLoop to exit
+	mgr.Close()
+
+	// Calling Close again should be a no-op (idempotent)
+	mgr.Close()
+}
+
+// TestConcurrentProviderSessionAccess - Race-detecting test for SetProvider/GetProvider/SetSessionID/GetSessionID.
+// Run with -race to detect data races on provider/sessionID fields.
+func TestConcurrentProviderSessionAccess(t *testing.T) {
+	mgr, _, cleanup := setupTestManager(t)
+	defer cleanup()
+
+	done := make(chan struct{})
+
+	// Writer: SetProvider / SetSessionID
+	go func() {
+		defer close(done)
+		for i := 0; i < 1000; i++ {
+			mgr.SetProvider("claude")
+			mgr.SetSessionID("sess-1")
+		}
+	}()
+
+	// Readers: concurrent GetProvider / GetSessionID (race with the writer)
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 1000; i++ {
+				_ = mgr.GetProvider()
+				_ = mgr.GetSessionID()
+			}
+		}()
+	}
+
+	<-done
+	wg.Wait()
 }
 
 // TestEventMarshaling TestEventMarshaling - Test event marshaling

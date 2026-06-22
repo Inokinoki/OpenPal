@@ -91,6 +91,9 @@ type Manager struct {
 
 	// Cache statistics (protected by cacheMu)
 	stats cacheStats
+
+	// Lifecycle management
+	stopCh chan struct{} // Signal cleanupLoop to stop
 }
 
 // Cache configuration constants
@@ -187,6 +190,7 @@ func NewManager(sessionDir string) *Manager {
 		outputCache:      make(map[string]*outputCache),
 		taskStates:       make(map[string]*TaskState),
 		devices:          make(map[string][]Device),
+		stopCh:           make(chan struct{}),
 		maxEventsPerTask: maxEvents,
 		minEventsPerTask: maxEvents / 10, // 10% of max
 		maxTotalMemory:   int64(maxMemoryMB) * 1024 * 1024,
@@ -205,43 +209,60 @@ func NewManager(sessionDir string) *Manager {
 
 // SetProvider - Set the AI provider for session recovery
 func (m *Manager) SetProvider(provider string) {
+	m.mu.Lock()
 	m.provider = provider
+	m.mu.Unlock()
 }
 
 // SetSessionID - Set the CLI session ID for history recovery
 func (m *Manager) SetSessionID(sessionID string) {
+	m.mu.Lock()
 	m.sessionID = sessionID
+	m.mu.Unlock()
 }
 
 // GetProvider - Get the AI provider
 func (m *Manager) GetProvider() string {
-	return m.provider
+	m.mu.RLock()
+	provider := m.provider
+	m.mu.RUnlock()
+	return provider
 }
 
 // GetSessionID - Get the CLI session ID
 func (m *Manager) GetSessionID() string {
-	return m.sessionID
+	m.mu.RLock()
+	sessionID := m.sessionID
+	m.mu.RUnlock()
+	return sessionID
 }
 
 // RecoverSessionFromCLI recovers session events from CLI agent's native storage
 // This is called on cache miss to retrieve historical messages from the CLI's session files
 // Supports: Claude (JSONL), Codex (SQLite + JSONL), Gemini (JSON)
 func (m *Manager) RecoverSessionFromCLI() ([]Event, error) {
-	if m.provider == "" || m.sessionID == "" {
+	// Snapshot provider/sessionID under read lock to avoid racing with SetProvider/SetSessionID
+	m.mu.RLock()
+	provider := m.provider
+	sessionID := m.sessionID
+	sessionDir := m.sessionDir
+	m.mu.RUnlock()
+
+	if provider == "" || sessionID == "" {
 		return nil, nil // No recovery possible without provider/session
 	}
 
 	// Create session reader for the provider
-	reader := adapter.CreateSessionReader(m.provider, m.sessionDir)
+	reader := adapter.CreateSessionReader(provider, sessionDir)
 	if reader == nil {
 		return nil, nil // Provider not supported for recovery
 	}
 
 	// Read session events
-	sessionEvents, err := reader.ReadSession(m.sessionID)
+	sessionEvents, err := reader.ReadSession(sessionID)
 	if err != nil {
 		// Session not found or read error - not fatal, just return nil
-		util.DebugLog("[DEBUG] session recovery failed for %s/%s: %v", m.provider, m.sessionID, err)
+		util.DebugLog("[DEBUG] session recovery failed for %s/%s: %v", provider, sessionID, err)
 		return nil, nil
 	}
 
@@ -256,7 +277,7 @@ func (m *Manager) RecoverSessionFromCLI() ([]Event, error) {
 		}
 	}
 
-	util.DebugLog("[DEBUG] recovered %d events from %s session %s", len(events), m.provider, m.sessionID)
+	util.DebugLog("[DEBUG] recovered %d events from %s session %s", len(events), provider, sessionID)
 	return events, nil
 }
 
@@ -267,34 +288,47 @@ func (m *Manager) cleanupLoop() {
 		// Fast path: check cache count without lock using atomic size
 		cacheCount := int(atomic.LoadInt64(&m.stats.size))
 
-		if cacheCount == 0 {
-			time.Sleep(CleanupInterval * 3)
-			continue
-		}
-
-		// Adaptive cleanup frequency based on cache pressure
 		var sleepTime time.Duration
-		pressure := float64(cacheCount) / float64(m.maxTaskCount)
-
-		if pressure < 0.25 {
-			// Low pressure: cleanup less frequently
-			sleepTime = CleanupInterval * 2
-		} else if pressure > 0.5 {
-			// High pressure: cleanup more frequently
-			sleepTime = CleanupInterval / 2
+		if cacheCount == 0 {
+			sleepTime = CleanupInterval * 3
 		} else {
-			// Normal pressure
-			sleepTime = CleanupInterval
+			// Adaptive cleanup frequency based on cache pressure
+			pressure := float64(cacheCount) / float64(m.maxTaskCount)
+
+			if pressure < 0.25 {
+				sleepTime = CleanupInterval * 2
+			} else if pressure > 0.5 {
+				sleepTime = CleanupInterval / 2
+			} else {
+				sleepTime = CleanupInterval
+			}
 		}
 
-		time.Sleep(sleepTime)
-		m.CleanupCache()
+		select {
+		case <-m.stopCh:
+			return
+		case <-time.After(sleepTime):
+			if cacheCount > 0 {
+				m.CleanupCache()
+			}
+		}
+	}
+}
+
+// Close - Stop the cleanupLoop goroutine
+func (m *Manager) Close() {
+	select {
+	case <-m.stopCh:
+		return // Already closed
+	default:
+		close(m.stopCh)
 	}
 }
 
 // CreateTask Create task (in-memory only, no file persistence)
 func (m *Manager) CreateTask(taskID, provider string) error {
 	now := time.Now().UnixMilli()
+	m.mu.Lock()
 	m.taskStates[taskID] = &TaskState{
 		TaskID:    taskID,
 		Provider:  provider,
@@ -303,12 +337,15 @@ func (m *Manager) CreateTask(taskID, provider string) error {
 		UpdatedAt: now,
 		Seq:       0,
 	}
+	m.mu.Unlock()
 	return nil
 }
 
 // LoadState LoadTask state (in-memory only)
 func (m *Manager) LoadState(taskID string) (*TaskState, error) {
+	m.mu.RLock()
 	state, ok := m.taskStates[taskID]
+	m.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("task not found: %s", taskID)
 	}
