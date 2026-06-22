@@ -185,6 +185,9 @@ func main() {
 	// Clean up status manager resources (flush pending writes, stop timer)
 	statusMgr.Close()
 
+	// Stop state manager's cleanupLoop goroutine
+	stateMgr.Close()
+
 	log.Println("Cleanup completed, exiting")
 	os.Exit(0)
 }
