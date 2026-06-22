@@ -50,12 +50,8 @@ func (s *WebSocketServer) startCLI(taskContent string) error {
 		}
 	}
 
-	// Start forwarding output (blocking for Claude -p mode, non-blocking for others)
-	if s.cliAdapter != nil && s.cliAdapter.GetProvider() == "claude" {
-		// Claude -p mode: wait for process to complete
-		s.ForwardOutput(cli.Stdout, cli.Stderr)
-		s.cli = nil // Clear CLI reference after completion
-	} else if s.cliAdapter != nil && s.cliAdapter.GetMode() == adapter.ModeACP {
+	// Send initial prompt and start forwarding output
+	if s.cliAdapter != nil && s.cliAdapter.GetMode() == adapter.ModeACP {
 		// ACP mode: use the ACP client's shared bufio.Reader to avoid competing
 		// readers on the same PTY file descriptor. The ACP client's reader may
 		// have buffered data from the handshake that must not be lost.
@@ -66,8 +62,7 @@ func (s *WebSocketServer) startCLI(taskContent string) error {
 		}()
 
 	} else {
-		// Text/Stream mode: send prompt via stdin
-		// For Claude, use EncodeStdinMessage for stream-json format
+		// Text/Stream mode (including Claude stream-json): send prompt via stdin
 		type stdinEncoder interface {
 			EncodeStdinMessage(text string) ([]byte, error)
 		}
@@ -85,10 +80,10 @@ func (s *WebSocketServer) startCLI(taskContent string) error {
 				return fmt.Errorf("failed to write prompt to stdin: %w", err)
 			}
 		}
-	}
 
-	// Forward output in background (all modes now use persistent processes)
-	go s.ForwardOutput(cli.Stdout, cli.Stderr)
+		// Forward output (ForwardOutput spawns its own goroutines and returns immediately)
+		s.ForwardOutput(cli.Stdout, cli.Stderr)
+	}
 
 	return nil
 }

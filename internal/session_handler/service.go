@@ -166,7 +166,6 @@ func queryCodexThreads(p *codexProvider) ([]ThreadInfo, error) {
 				}
 			}
 		}()
-		db.Close()
 	}
 
 	// From filesystem

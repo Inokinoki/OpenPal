@@ -90,6 +90,7 @@ func (s *WebSocketServer) handleWebSocket(w http.ResponseWriter, r *http.Request
 
 	// ConfigurationConnected
 	conn.SetReadLimit(MaxMessageSize)
+	conn.SetReadDeadline(time.Now().Add(PongTimeout))
 	conn.SetWriteDeadline(time.Now().Add(WriteTimeout))
 	conn.SetPongHandler(func(string) error {
 		conn.SetReadDeadline(time.Now().Add(PongTimeout))
@@ -215,9 +216,19 @@ func (s *WebSocketServer) sendHistory(conn *websocket.Conn, deviceID string) {
 	// Send current status
 	taskState, err := s.stateMgr.LoadState(s.taskID)
 	if err == nil && taskState != nil {
-		statusJSON := []byte(`{"type":"status","data":{"status":"` + taskState.Status + `"}}`)
-		conn.WriteMessage(websocket.TextMessage, statusJSON)
+		statusJSON, _ := json.Marshal(map[string]interface{}{
+			"type": "status",
+			"data": map[string]interface{}{"status": taskState.Status},
+		})
+		if err := conn.WriteMessage(websocket.TextMessage, statusJSON); err != nil {
+			s.errorCh <- fmt.Errorf("failed to send status: %w", err)
+			return
+		}
 	}
+
+	// Clear write deadline so subsequent writes (broadcasts, pings) don't inherit
+	// an expired deadline from this initial burst
+	conn.SetWriteDeadline(time.Time{})
 }
 
 // clientMsgPool - Pool for reusing ClientMessage structs in listen

@@ -260,19 +260,6 @@ func IsConnectionError(errStr string) bool {
 		strings.Contains(errStr, "connection refused")
 }
 
-// SafeClose - Safely close a channel with recovery
-func SafeClose(ch chan interface{}) {
-	defer func() { recover() }()
-	select {
-	case <-ch:
-		// Drained buffered value, now close
-		close(ch)
-	default:
-		// No buffered value, just close
-		close(ch)
-	}
-}
-
 // ClearMap - Clear all keys from a map for pool reuse
 // Optimized: avoids allocation by reusing existing map capacity
 // Use this before returning maps to sync.Pool to prevent data leakage

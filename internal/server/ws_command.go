@@ -56,7 +56,12 @@ func handleHeartbeat(s *WebSocketServer, msg *ClientMessage, client *WebSocketCl
 // handleStartTask - Handle start_task command
 // Optimization 2026-02-24 13:00: Consistent pointer usage for msg parameter
 func handleStartTask(s *WebSocketServer, msg *ClientMessage, client *WebSocketClient) {
-	if task, ok := msg.Data["task"].(string); ok {
+	// Accept both "content" and "task" keys for flexibility
+	task, hasContent := msg.Data["content"].(string)
+	if !hasContent {
+		task, _ = msg.Data["task"].(string)
+	}
+	if task != "" {
 		s.queueInputWithLogging("task", task)
 	}
 }
@@ -91,20 +96,24 @@ func handleCancel(s *WebSocketServer, msg *ClientMessage, client *WebSocketClien
 	// Drain input queue to prevent stale messages from being processed
 	drained := drainInputQueue(s.inputQueue)
 
-	// Stop CLI and update state with single mutex lock (reduces contention)
+	// Stop CLI: snapshot under lock, stop outside lock to avoid holding mutex during I/O
 	var cliPID int
+	var cliToStop *adapter.CLIProcess
 	if s.cliStarted.Load() {
 		s.mu.Lock()
 		if s.cli != nil {
 			cliPID = s.cli.Pid
-			util.DebugLog("[DEBUG] handleCancel: stopping CLI (PID: %d, drained=%d)", cliPID, drained)
-			if err := s.cli.Stop(); err != nil {
-				util.DebugLog("[DEBUG] handleCancel: CLI stop error: %v", err)
-			}
+			cliToStop = s.cli
 			s.cli = nil
 		}
 		s.cliStarted.Store(false)
 		s.mu.Unlock()
+	}
+	if cliToStop != nil {
+		util.DebugLog("[DEBUG] handleCancel: stopping CLI (PID: %d, drained=%d)", cliPID, drained)
+		if err := cliToStop.Stop(); err != nil {
+			util.DebugLog("[DEBUG] handleCancel: CLI stop error: %v", err)
+		}
 	}
 
 	// Update task status to stopped (separate lock, but UpdateStatus is fast)

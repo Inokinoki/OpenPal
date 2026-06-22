@@ -69,9 +69,10 @@ func (s *WebSocketServer) forwardStream(reader io.Reader, eventType string) {
 	stateMgr := s.stateMgr
 	broadcastCh := s.broadcastCh
 	taskID := s.taskID
+	cliAdapter := s.cliAdapter // Snapshot to avoid race during shutdown
 	provider := ""
-	if s.cliAdapter != nil {
-		provider = s.cliAdapter.GetProvider()
+	if cliAdapter != nil {
+		provider = cliAdapter.GetProvider()
 		// Set provider in state manager for session recovery
 		stateMgr.SetProvider(provider)
 	}
@@ -100,7 +101,7 @@ func (s *WebSocketServer) forwardStream(reader io.Reader, eventType string) {
 			type sessionUpdater interface {
 				UpdateSessionID(line string)
 			}
-			if adapter, ok := s.cliAdapter.GetAdapter().(sessionUpdater); ok {
+			if adapter, ok := cliAdapter.GetAdapter().(sessionUpdater); ok {
 				adapter.UpdateSessionID(string(line))
 				// Also sync session ID to state manager for recovery
 				type sessionGetter interface {
@@ -119,7 +120,7 @@ func (s *WebSocketServer) forwardStream(reader io.Reader, eventType string) {
 			type acpSessionGetter interface {
 				GetSessionID() string
 			}
-			if acpClient, ok := s.cliAdapter.GetACPClient(); ok {
+			if acpClient, ok := cliAdapter.GetACPClient(); ok {
 				if getter, ok := acpClient.(acpSessionGetter); ok {
 					if sid := getter.GetSessionID(); sid != "" {
 						stateMgr.SetSessionID(sid)

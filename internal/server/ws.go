@@ -186,6 +186,7 @@ type WebSocketServer struct {
 	lastBroadcast      int64               // Last broadcast timestamp (atomic, Unix nanoseconds)
 	connRateLimit      connectionRateLimit // Connection rate limiting
 	maxClients         int64               // Maximum concurrent clients (0 = unlimited)
+	stopOnce           sync.Once           // Guard against double-close of channels
 }
 
 // ClientMessage Client message
@@ -361,13 +362,15 @@ func (s *WebSocketServer) Stop() error {
 	}
 	wg.Wait()
 
-	// 4. Close channels (broadcastCh may already be closed by broadcastHandler exit)
-	select {
-	case <-s.broadcastCh:
-	default:
-		close(s.broadcastCh)
-	}
-	close(s.errorCh)
+	// 4. Close channels (protected against double-close)
+	s.stopOnce.Do(func() {
+		select {
+		case <-s.broadcastCh:
+		default:
+			close(s.broadcastCh)
+		}
+		close(s.errorCh)
+	})
 
 	// 5. Stop CLI with timeout
 	if s.cli != nil {

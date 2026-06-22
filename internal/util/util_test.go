@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"sync"
 	"testing"
-	"time"
 )
 
 // ============== Debug Logger Tests ==============
@@ -425,74 +424,6 @@ func TestIsConnectionError(t *testing.T) {
 				t.Errorf("IsConnectionError(%q) = %v, want %v", tt.input, got, tt.want)
 			}
 		})
-	}
-}
-
-// ============== SafeClose Tests ==============
-
-// TestSafeClose tests safe channel closing
-func TestSafeClose(t *testing.T) {
-	// Test closing open channel
-	ch := make(chan interface{})
-	SafeClose(ch)
-
-	// Verify channel is closed
-	select {
-	case _, ok := <-ch:
-		if ok {
-			t.Error("Expected channel to be closed")
-		}
-	default:
-		t.Error("Expected channel to be closed (non-blocking read)")
-	}
-
-	// Test closing already closed channel (should not panic)
-	SafeClose(ch) // Should recover from panic
-}
-
-// TestSafeCloseWithSelect tests SafeClose with select pattern
-func TestSafeCloseWithSelect(t *testing.T) {
-	// Test 1: Empty channel should be closed
-	ch1 := make(chan interface{}, 1)
-	SafeClose(ch1)
-
-	// Verify channel is closed by using non-blocking select
-	select {
-	case _, ok := <-ch1:
-		if ok {
-			t.Error("Expected ch1 to be closed")
-		}
-	default:
-		// This means channel is open but empty - should not happen for empty channel
-		t.Error("Expected ch1 to be closed, not just empty")
-	}
-
-	// Test 2: Channel with buffered value - SafeClose consumes the value then closes
-	ch2 := make(chan interface{}, 1)
-	ch2 <- "test"
-
-	// Close channel (this will consume the buffered value then close)
-	SafeClose(ch2)
-
-	// Use timeout-based check to verify channel behavior
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		// Try to read - should either get value or detect closed channel
-		val, ok := <-ch2
-		if !ok {
-			t.Log("Channel is closed (no more values)")
-		} else {
-			t.Logf("Got buffered value: %v", val)
-		}
-	}()
-
-	// Wait for goroutine to complete (should be immediate)
-	select {
-	case <-done:
-		// Success - goroutine completed
-	case <-time.After(1 * time.Second):
-		t.Error("Channel read timed out - channel may not be properly closed")
 	}
 }
 
