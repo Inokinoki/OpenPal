@@ -252,7 +252,8 @@ func (m *Manager) SetTask(task string) {
 	m.config.Task = task
 }
 
-// EnableACP - Force enable ACP mode
+// EnableACP is a no-op for providers that already speak a native CLI protocol
+// (Claude stream-json, Codex exec, Gemini chat). Only Copilot and OpenCode use ACP.
 func (m *Manager) EnableACP() {
 	m.forceACP = true
 }
@@ -282,13 +283,9 @@ func (m *Manager) GetACPClient() (interface{}, bool) {
 	return nil, false
 }
 
-// GetACPReader - Get the ACP client's shared buffered reader
-// Returns the reader that has already consumed handshake data, preventing
-// data loss when forwarding ACP output. Returns nil if not in ACP mode.
+// GetACPReader is retained for compatibility. The ACP read loop owns stdout;
+// callers must not create a competing reader.
 func (m *Manager) GetACPReader() io.Reader {
-	if m.acpClient != nil {
-		return m.acpClient.GetReader()
-	}
 	return nil
 }
 
@@ -296,6 +293,9 @@ func (m *Manager) GetACPReader() io.Reader {
 func (m *Manager) Start() (*CLIProcess, error) {
 	// ACP mode
 	if m.mode == ModeACP && m.acpClient != nil {
+		if m.config != nil {
+			m.acpClient.SetWorkDir(m.config.WorkDir)
+		}
 		// Start ACP process and initialize
 		if err := m.acpClient.Start(); err != nil {
 			return nil, fmt.Errorf("ACP client start failed (provider=%s): %w", m.config.Provider, err)
@@ -305,7 +305,7 @@ func (m *Manager) Start() (*CLIProcess, error) {
 			Cmd:    m.acpClient.cmd,
 			Stdin:  m.acpClient.stdin,
 			Stdout: m.acpClient.stdout,
-			Stderr: nil, // ACP usually does not use stderr
+			Stderr: m.acpClient.stderr,
 			Pid:    m.acpClient.Pid(),
 		}, nil
 	}
@@ -346,11 +346,53 @@ func (m *Manager) Start() (*CLIProcess, error) {
 
 // CreateSession Create ACP session (ACP mode only)
 func (m *Manager) CreateSession(cwd string) error {
-	if m.mode == ModeACP && m.acpClient != nil {
-		_, err := m.acpClient.NewSession(cwd, []interface{}{})
-		return err
+	if m.mode != ModeACP || m.acpClient == nil {
+		return nil
 	}
-	return nil // Text mode doesn't need session
+	if cwd == "" && m.config != nil {
+		cwd = m.config.WorkDir
+	}
+	_, err := m.acpClient.NewSession(cwd, []interface{}{})
+	return err
+}
+
+// WorkDir returns the adapter working directory.
+func (m *Manager) WorkDir() string {
+	if m.config == nil {
+		return ""
+	}
+	return m.config.WorkDir
+}
+
+// SetACPEventHandler registers a callback for parsed ACP events (session/update, permissions).
+func (m *Manager) SetACPEventHandler(handler func(map[string]interface{})) {
+	if m.acpClient != nil {
+		m.acpClient.SetEventHandler(handler)
+	}
+}
+
+// RespondACPPermission answers a pending ACP session/request_permission.
+func (m *Manager) RespondACPPermission(approve bool) error {
+	if m.mode != ModeACP || m.acpClient == nil {
+		return fmt.Errorf("ACP mode not enabled")
+	}
+	return m.acpClient.RespondPermission(approve)
+}
+
+// CancelACP cancels the current ACP prompt turn without killing the process.
+func (m *Manager) CancelACP() error {
+	if m.mode != ModeACP || m.acpClient == nil {
+		return fmt.Errorf("ACP mode not enabled")
+	}
+	return m.acpClient.Cancel()
+}
+
+// ACPSessionID returns the active ACP session id, if any.
+func (m *Manager) ACPSessionID() string {
+	if m.acpClient == nil {
+		return ""
+	}
+	return m.acpClient.GetSessionID()
 }
 
 // SendCommand Send command to CLI

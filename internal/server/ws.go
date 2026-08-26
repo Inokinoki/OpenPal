@@ -616,14 +616,9 @@ func (s *WebSocketServer) forwardStream(reader io.Reader, eventType string) {
 
 		// Sync ACP session ID to state manager (for Copilot/OpenCode)
 		if provider == "copilot" || provider == "opencode" {
-			type acpSessionGetter interface {
-				GetSessionID() string
-			}
-			if acpClient, ok := s.cliAdapter.GetACPClient(); ok {
-				if getter, ok := acpClient.(acpSessionGetter); ok {
-					if sid := getter.GetSessionID(); sid != "" {
-						stateMgr.SetSessionID(sid)
-					}
+			if s.cliAdapter != nil {
+				if sid := s.cliAdapter.ACPSessionID(); sid != "" {
+					stateMgr.SetSessionID(sid)
 				}
 			}
 		}
@@ -1040,13 +1035,9 @@ func (s *WebSocketServer) attemptReconnect(client *WebSocketClient) {
 
 // startCLI - Start CLI with the given task content (extracted for reusability)
 func (s *WebSocketServer) startCLI(taskContent string) error {
-	// Set task in adapter
 	s.cliAdapter.SetTask(taskContent)
 
-	// Initialize Claude session manager if using Claude provider
-	// This must be called before starting CLI to enable session resume
-	if s.cliAdapter != nil && s.cliAdapter.GetProvider() == "claude" {
-		// Type assertion to access ClaudeAdapter-specific methods
+	if s.cliAdapter.GetProvider() == "claude" {
 		type sessionInitializer interface {
 			SetSessionDir(sessionDir, taskID string)
 		}
@@ -1058,68 +1049,88 @@ func (s *WebSocketServer) startCLI(taskContent string) error {
 		}
 	}
 
-	// Start CLI (for ACP mode, this starts the process and initializes)
+	if s.cliAdapter.GetMode() == adapter.ModeACP {
+		s.cliAdapter.SetACPEventHandler(s.emitACPEvent)
+	}
+
 	cli, err := s.cliAdapter.Start()
 	if err != nil {
 		return fmt.Errorf("failed to start CLI: %w", err)
 	}
-
 	s.cli = cli
 
-	// For ACP mode, create session after starting CLI
-	if err := s.cliAdapter.CreateSession(s.sessionDir); err != nil {
-		return fmt.Errorf("failed to create session: %w", err)
-	}
-
-	// Send initial prompt
 	if s.cliAdapter.GetMode() == adapter.ModeACP {
-		// ACP mode: send prompt using ACP protocol
+		cwd := s.cliAdapter.WorkDir()
+		if cwd == "" {
+			cwd = s.sessionDir
+		}
+		if err := s.cliAdapter.CreateSession(cwd); err != nil {
+			return fmt.Errorf("failed to create session: %w", err)
+		}
+		if sid := s.cliAdapter.ACPSessionID(); sid != "" {
+			s.stateMgr.SetSessionID(sid)
+			s.stateMgr.SetProvider(s.cliAdapter.GetProvider())
+		}
 		if err := s.cliAdapter.SendACPPrompt(taskContent); err != nil {
 			return fmt.Errorf("failed to send prompt: %w", err)
 		}
+		// The ACP read loop owns stdout. Only forward stderr if the process has one.
+		if cli.Stderr != nil {
+			s.wg.Add(1)
+			go func() {
+				defer s.wg.Done()
+				s.forwardStream(cli.Stderr, "error")
+			}()
+		}
+		return nil
 	}
 
-	// Start forwarding output (blocking for Claude -p mode, non-blocking for others)
-	if s.cliAdapter != nil && s.cliAdapter.GetProvider() == "claude" {
-		// Claude -p mode: wait for process to complete
-		s.ForwardOutput(cli.Stdout, cli.Stderr)
-		s.cli = nil // Clear CLI reference after completion
-	} else if s.cliAdapter != nil && s.cliAdapter.GetMode() == adapter.ModeACP {
-		// ACP mode: use the ACP client's shared bufio.Reader to avoid competing
-		// readers on the same PTY file descriptor. The ACP client's reader may
-		// have buffered data from the handshake that must not be lost.
-		s.wg.Add(1)
-		go func() {
-			defer s.wg.Done()
-			s.forwardStream(s.cliAdapter.GetACPReader(), "chunk")
-		}()
-
-	} else {
-		// Text/Stream mode: send prompt via stdin
-		// For Claude, use EncodeStdinMessage for stream-json format
-		type stdinEncoder interface {
-			EncodeStdinMessage(text string) ([]byte, error)
+	// Native CLI protocols (Claude stream-json, Codex exec, Gemini chat):
+	// send the first prompt on stdin only when the adapter encodes messages
+	// that way. Providers that pass the task as argv (Codex/Gemini) skip this.
+	type stdinEncoder interface {
+		EncodeStdinMessage(text string) ([]byte, error)
+	}
+	if enc, ok := s.cliAdapter.GetAdapter().(stdinEncoder); ok {
+		data, err := enc.EncodeStdinMessage(taskContent)
+		if err != nil {
+			return fmt.Errorf("failed to encode prompt: %w", err)
 		}
-		if enc, ok := s.cliAdapter.GetAdapter().(stdinEncoder); ok {
-			data, err := enc.EncodeStdinMessage(taskContent)
-			if err != nil {
-				return fmt.Errorf("failed to encode prompt: %w", err)
-			}
-			if _, err := cli.Stdin.Write(append(data, '\n')); err != nil {
-				return fmt.Errorf("failed to write prompt to stdin: %w", err)
-			}
-		} else if s.cliAdapter.GetAdapter() != nil {
-			// Generic text mode: write raw text
-			if _, err := fmt.Fprintf(cli.Stdin, "%s\n", taskContent); err != nil {
-				return fmt.Errorf("failed to write prompt to stdin: %w", err)
-			}
+		if _, err := cli.Stdin.Write(append(data, '\n')); err != nil {
+			return fmt.Errorf("failed to write prompt to stdin: %w", err)
 		}
 	}
 
-	// Forward output in background (all modes now use persistent processes)
-	go s.ForwardOutput(cli.Stdout, cli.Stderr)
-
+	s.ForwardOutput(cli.Stdout, cli.Stderr)
 	return nil
+}
+
+// emitACPEvent broadcasts a parsed ACP event to connected WebSocket clients.
+func (s *WebSocketServer) emitACPEvent(event map[string]interface{}) {
+	if event == nil {
+		return
+	}
+	eventType, _ := event["type"].(string)
+	if eventType == "" {
+		eventType = "chunk"
+	}
+	if sid := s.cliAdapter.ACPSessionID(); sid != "" {
+		s.stateMgr.SetSessionID(sid)
+		s.stateMgr.SetProvider(s.cliAdapter.GetProvider())
+	}
+
+	ev := state.Event{
+		Type:      eventType,
+		Timestamp: time.Now().UnixMilli(),
+		Data:      state.CloneEventDataForForward(event),
+	}
+	if err := s.stateMgr.AddOutput(s.taskID, ev); err != nil {
+		util.DebugLog("emitACPEvent: add output error: %v", err)
+	}
+	select {
+	case s.broadcastCh <- ev:
+	default:
+	}
 }
 
 // processInputQueue - Process input queue and send to CLI
@@ -1138,25 +1149,23 @@ func (s *WebSocketServer) processInputQueue() {
 				return
 			}
 
+			s.mu.RLock()
+			cliAlive := s.cli != nil
+			s.mu.RUnlock()
+
+			if !cliAlive {
+				if err := s.startCLI(inputMsg.Content); err != nil {
+					s.errorCh <- err
+				}
+				continue
+			}
+
 			if s.cliAdapter.GetMode() == adapter.ModeACP {
-				// ACP mode: send via ACP protocol (persistent connection)
 				if err := s.cliAdapter.SendACPPrompt(inputMsg.Content); err != nil {
 					s.errorCh <- fmt.Errorf("send input: %w", err)
 				}
 			} else {
-				// Stream/Text mode with persistent CLI: send via stdin
-				s.mu.RLock()
-				cliAlive := s.cli != nil && s.cli.Stdin != nil
-				s.mu.RUnlock()
-
-				if !cliAlive {
-					// CLI not running, start it with the input as initial prompt
-					if err := s.startCLI(inputMsg.Content); err != nil {
-						s.errorCh <- err
-					}
-				} else {
-					s.sendToCLI(inputMsg)
-				}
+				s.sendToCLI(inputMsg)
 			}
 		}
 	}
@@ -1298,6 +1307,12 @@ func drainInputQueue(queue chan InputMessage) int {
 func handleCancel(s *WebSocketServer, msg *ClientMessage, client *WebSocketClient) {
 	// Drain input queue to prevent stale messages from being processed
 	drained := drainInputQueue(s.inputQueue)
+
+	if s.cliAdapter != nil && s.cliAdapter.GetMode() == adapter.ModeACP {
+		if err := s.cliAdapter.CancelACP(); err != nil {
+			util.DebugLog("[DEBUG] handleCancel: ACP cancel error: %v", err)
+		}
+	}
 
 	// Stop CLI and update state with single mutex lock (reduces contention)
 	var cliPID int
@@ -1515,6 +1530,13 @@ func handleReject(s *WebSocketServer, msg *ClientMessage, client *WebSocketClien
 // Optimized: single cliAlive check, minimal allocations, shared code path
 // Performance: ~40-80ns per call (dominated by I/O)
 func (s *WebSocketServer) sendApprovalToCLI(approve bool) {
+	if s.cliAdapter != nil && s.cliAdapter.GetMode() == adapter.ModeACP {
+		if err := s.cliAdapter.RespondACPPermission(approve); err != nil {
+			s.errorCh <- fmt.Errorf("failed to send ACP permission response: %w", err)
+		}
+		return
+	}
+
 	s.mu.RLock()
 	cli := s.cli
 	cliAlive := s.cliStarted.Load() && cli != nil && cli.Stdin != nil
@@ -1524,7 +1546,7 @@ func (s *WebSocketServer) sendApprovalToCLI(approve bool) {
 		return
 	}
 
-	// Single byte + newline for approval response
+	// Native CLIs that prompt on stdin (y/n)
 	response := []byte{'n', '\n'}
 	if approve {
 		response[0] = 'y'
