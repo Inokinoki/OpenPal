@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -27,18 +28,20 @@ var (
 )
 
 var (
-	taskID       = flag.String("task", "", "task ID (alias: --quest-id)")
-	questID      = flag.String("quest-id", "", "quest ID (alias: --task)")
-	provider     = flag.String("provider", "", "AI provider (claude, codex, copilot)")
-	cliPath      = flag.String("cli-path", "", "path to AI CLI executable")
-	workDir      = flag.String("work-dir", "", "working directory for AI CLI")
-	sessionDir   = flag.String("session-dir", "/tmp/pal-broker", "session directory")
-	portFlag     = flag.String("port", ":0", "WebSocket port (default: random)")
-	capabilities = flag.String("capabilities", "", "comma-separated list of capabilities")
-	supportsACP  = flag.Bool("supports-acp", false, "CLI supports ACP protocol")
-	supportsJSON = flag.Bool("supports-json", false, "CLI supports JSON stream output")
-	envFile      = flag.String("env-file", ".env", "path to .env file")
-	showVersion  = flag.Bool("version", false, "show version and build info")
+	taskID        = flag.String("task", "", "task ID (alias: --quest-id)")
+	questID       = flag.String("quest-id", "", "quest ID (alias: --task)")
+	provider      = flag.String("provider", "", "AI provider (claude, codex, copilot)")
+	cliPath       = flag.String("cli-path", "", "path to AI CLI executable")
+	workDir       = flag.String("work-dir", "", "working directory for AI CLI")
+	sessionDir    = flag.String("session-dir", "/tmp/pal-broker", "session directory")
+	portFlag      = flag.String("port", ":0", "WebSocket port (default: random)")
+	capabilities  = flag.String("capabilities", "", "comma-separated list of capabilities")
+	supportsACP   = flag.Bool("supports-acp", false, "CLI supports ACP protocol")
+	supportsJSON  = flag.Bool("supports-json", false, "CLI supports JSON stream output")
+	sessionIDFlag = flag.String("session-id", "", "ACP session ID to resume (Copilot/OpenCode)")
+	mcpServers    = flag.String("mcp-servers", "", "JSON array of MCP servers for ACP session/new and session/load")
+	envFile       = flag.String("env-file", ".env", "path to .env file")
+	showVersion   = flag.Bool("version", false, "show version and build info")
 )
 
 func main() {
@@ -152,6 +155,8 @@ func main() {
 		cliAdapter.EnableJSONStream()
 		log.Printf("JSON stream mode enabled via flag")
 	}
+
+	applyACPClientOptions(cliAdapter)
 
 	// Start WebSocket server (CLI not started yet)
 	wsServer := server.NewWebSocketServer(stateMgr, id, cliAdapter, *sessionDir)
@@ -269,6 +274,32 @@ func printVersion() {
 }
 
 // formatStartupLog - Format startup log with structured info
+func applyACPClientOptions(cliAdapter *adapter.Manager) {
+	sid := *sessionIDFlag
+	if sid == "" {
+		sid = os.Getenv("PAL_ACP_SESSION_ID")
+	}
+	if sid != "" {
+		cliAdapter.SetResumeSessionID(sid)
+		log.Printf("ACP resume session id set: %s", sid)
+	}
+
+	raw := *mcpServers
+	if raw == "" {
+		raw = os.Getenv("PAL_MCP_SERVERS")
+	}
+	if raw == "" {
+		return
+	}
+	servers, err := adapter.ParseMCPServers(json.RawMessage(raw))
+	if err != nil {
+		log.Printf("Warning: invalid MCP servers JSON: %v", err)
+		return
+	}
+	cliAdapter.SetMCPServers(servers)
+	log.Printf("ACP MCP servers configured: %d", len(servers))
+}
+
 func formatStartupLog(id, provider, workDir string, supportsACP, supportsJSON bool) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("🚀 pal-broker v%s starting\n", Version))

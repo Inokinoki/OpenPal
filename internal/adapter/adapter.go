@@ -98,14 +98,16 @@ type Adapter interface {
 
 // Manager - Adapter manager
 type Manager struct {
-	adapter       Adapter
-	acpClient     *ACPClient // ACP client (if supported)
-	config        *CLIConfig
-	mode          AdapterMode // ACP or Text mode
-	customCLIPath string      // Custom CLI path
-	customCaps    []string    // Custom capabilities
-	forceACP      bool        // Force ACP mode
-	forceJSON     bool        // Force JSON stream mode
+	adapter         Adapter
+	acpClient       *ACPClient // ACP client (if supported)
+	config          *CLIConfig
+	mode            AdapterMode // ACP or Text mode
+	customCLIPath   string      // Custom CLI path
+	customCaps      []string    // Custom capabilities
+	forceACP        bool        // Force ACP mode
+	forceJSON       bool        // Force JSON stream mode
+	mcpServers      []MCPServer
+	resumeSessionID string
 }
 
 // AdapterMode - Adapter mode
@@ -252,7 +254,8 @@ func (m *Manager) SetTask(task string) {
 	m.config.Task = task
 }
 
-// EnableACP - Force enable ACP mode
+// EnableACP is a no-op for providers that already speak a native CLI protocol
+// (Claude stream-json, Codex exec, Gemini chat). Only Copilot and OpenCode use ACP.
 func (m *Manager) EnableACP() {
 	m.forceACP = true
 }
@@ -282,13 +285,9 @@ func (m *Manager) GetACPClient() (interface{}, bool) {
 	return nil, false
 }
 
-// GetACPReader - Get the ACP client's shared buffered reader
-// Returns the reader that has already consumed handshake data, preventing
-// data loss when forwarding ACP output. Returns nil if not in ACP mode.
+// GetACPReader is retained for compatibility. The ACP read loop owns stdout;
+// callers must not create a competing reader.
 func (m *Manager) GetACPReader() io.Reader {
-	if m.acpClient != nil {
-		return m.acpClient.GetReader()
-	}
 	return nil
 }
 
@@ -296,6 +295,9 @@ func (m *Manager) GetACPReader() io.Reader {
 func (m *Manager) Start() (*CLIProcess, error) {
 	// ACP mode
 	if m.mode == ModeACP && m.acpClient != nil {
+		if m.config != nil {
+			m.acpClient.SetWorkDir(m.config.WorkDir)
+		}
 		// Start ACP process and initialize
 		if err := m.acpClient.Start(); err != nil {
 			return nil, fmt.Errorf("ACP client start failed (provider=%s): %w", m.config.Provider, err)
@@ -305,7 +307,7 @@ func (m *Manager) Start() (*CLIProcess, error) {
 			Cmd:    m.acpClient.cmd,
 			Stdin:  m.acpClient.stdin,
 			Stdout: m.acpClient.stdout,
-			Stderr: nil, // ACP usually does not use stderr
+			Stderr: m.acpClient.stderr,
 			Pid:    m.acpClient.Pid(),
 		}, nil
 	}
@@ -344,13 +346,117 @@ func (m *Manager) Start() (*CLIProcess, error) {
 	}, nil
 }
 
-// CreateSession Create ACP session (ACP mode only)
-func (m *Manager) CreateSession(cwd string) error {
-	if m.mode == ModeACP && m.acpClient != nil {
-		_, err := m.acpClient.NewSession(cwd, []interface{}{})
-		return err
+// SetMCPServers sets session-scoped MCP servers for the next session/new or session/load.
+func (m *Manager) SetMCPServers(servers []MCPServer) {
+	if servers == nil {
+		m.mcpServers = nil
+		return
 	}
-	return nil // Text mode doesn't need session
+	cp := make([]MCPServer, len(servers))
+	copy(cp, servers)
+	m.mcpServers = cp
+}
+
+// SetResumeSessionID sets an ACP session id to try via session/load on CreateSession.
+func (m *Manager) SetResumeSessionID(sessionID string) {
+	m.resumeSessionID = strings.TrimSpace(sessionID)
+}
+
+// CreateSession creates or resumes an ACP session (ACP mode only).
+// If a resume id is set and the agent advertised loadSession, session/load is
+// tried first; failure falls back to session/new.
+func (m *Manager) CreateSession(cwd string) error {
+	if m.mode != ModeACP || m.acpClient == nil {
+		return nil
+	}
+	if cwd == "" && m.config != nil {
+		cwd = m.config.WorkDir
+	}
+	mcp := m.mcpServersForAgent()
+	resume := m.resumeSessionID
+	if resume != "" && m.acpClient.SupportsLoadSession() {
+		if err := m.acpClient.LoadSession(resume, cwd, mcp); err == nil {
+			return nil
+		} else {
+			util.DebugLog("[DEBUG] session/load failed, creating new session: %v", err)
+			m.acpClient.emitEvent(map[string]interface{}{
+				"type":    "warning",
+				"content": fmt.Sprintf("session/load failed (%s); starting a new session", err.Error()),
+			})
+		}
+	} else if resume != "" && !m.acpClient.SupportsLoadSession() {
+		m.acpClient.emitEvent(map[string]interface{}{
+			"type":    "warning",
+			"content": "agent does not support session/load; starting a new session",
+		})
+	}
+	_, err := m.acpClient.NewSession(cwd, mcp)
+	return err
+}
+
+func (m *Manager) mcpServersForAgent() []interface{} {
+	if m.acpClient == nil {
+		return MCPServersToACP(m.mcpServers)
+	}
+	filtered := make([]MCPServer, 0, len(m.mcpServers))
+	for _, s := range m.mcpServers {
+		kind := strings.ToLower(strings.TrimSpace(s.Type))
+		if kind == "http" && !m.acpClient.SupportsMCPHTTP() {
+			m.acpClient.emitEvent(map[string]interface{}{
+				"type":    "warning",
+				"content": fmt.Sprintf("skipping HTTP MCP server %q: agent did not advertise mcpCapabilities.http", s.Name),
+			})
+			continue
+		}
+		if kind == "sse" && !m.acpClient.SupportsMCPSSE() {
+			m.acpClient.emitEvent(map[string]interface{}{
+				"type":    "warning",
+				"content": fmt.Sprintf("skipping SSE MCP server %q: agent did not advertise mcpCapabilities.sse", s.Name),
+			})
+			continue
+		}
+		filtered = append(filtered, s)
+	}
+	return MCPServersToACP(filtered)
+}
+
+// WorkDir returns the adapter working directory.
+func (m *Manager) WorkDir() string {
+	if m.config == nil {
+		return ""
+	}
+	return m.config.WorkDir
+}
+
+// SetACPEventHandler registers a callback for parsed ACP events (session/update, permissions).
+func (m *Manager) SetACPEventHandler(handler func(map[string]interface{})) {
+	if m.acpClient != nil {
+		m.acpClient.SetEventHandler(handler)
+	}
+}
+
+// RespondACPPermission answers a pending ACP session/request_permission.
+func (m *Manager) RespondACPPermission(approve bool) error {
+	if m.mode != ModeACP || m.acpClient == nil {
+		return fmt.Errorf("ACP mode not enabled")
+	}
+	return m.acpClient.RespondPermission(approve)
+}
+
+// CancelACP cancels the current ACP prompt turn without killing the process.
+func (m *Manager) CancelACP() error {
+	if m.mode != ModeACP || m.acpClient == nil {
+		return fmt.Errorf("ACP mode not enabled")
+	}
+	return m.acpClient.Cancel()
+}
+
+// ACPSessionID returns the active ACP session id, if any.
+func (m *Manager) ACPSessionID() string {
+	if m.acpClient == nil {
+		return ""
+	}
+	return m.acpClient.GetSessionID()
 }
 
 // SendCommand Send command to CLI
@@ -1262,10 +1368,15 @@ func (a *GenericAdapter) GetCapabilities() []string {
 
 // SendACPPrompt Send prompt to ACP server
 func (m *Manager) SendACPPrompt(prompt string) error {
+	return m.SendACPPromptWith(prompt, nil)
+}
+
+// SendACPPromptWith sends an ACP prompt with optional ContentBlock attachments.
+func (m *Manager) SendACPPromptWith(prompt string, atts []PromptAttachment) error {
 	if m.mode != ModeACP || m.acpClient == nil {
 		return fmt.Errorf("ACP mode not enabled")
 	}
-	return m.acpClient.Prompt(prompt)
+	return m.acpClient.PromptWith(prompt, atts)
 }
 
 // GetMode GetCurrentMode

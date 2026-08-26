@@ -57,6 +57,7 @@ func main() {
 	questID := flag.String("quest-id", "test-quest", "Quest ID")
 	provider := flag.String("provider", "claude", "AI provider")
 	task := flag.String("task", "", "Task description")
+	sessionID := flag.String("session-id", "", "ACP session ID to resume")
 	interactive := flag.Bool("i", false, "Interactive mode")
 	verbose := flag.Bool("v", false, "Verbose output (show raw messages)")
 	testMode := flag.Bool("test", false, "Test mode (run automated tests)")
@@ -131,14 +132,18 @@ func main() {
 	}()
 
 	// Send initial task if provided
-	if config.Task != "" {
+		if config.Task != "" {
 		fmt.Printf("📤 Sending: %s\n", config.Task)
+		data := map[string]interface{}{
+			"task": config.Task,
+		}
+		if *sessionID != "" {
+			data["session_id"] = *sessionID
+		}
 		msg := Message{
-			Command:   "send_input",
+			Command:   "start_task",
 			Timestamp: time.Now().UnixMilli(),
-			Data: map[string]interface{}{
-				"content": config.Task,
-			},
+			Data:      data,
 		}
 		if err := conn.WriteJSON(msg); err != nil {
 			log.Printf("❌ Send failed: %v", err)
@@ -189,6 +194,47 @@ func main() {
 	}
 }
 
+func stringField(data map[string]interface{}, key string) (string, bool) {
+	if data == nil {
+		return "", false
+	}
+	s, ok := data[key].(string)
+	return s, ok && s != ""
+}
+
+func handleLegacyACPChunk(data map[string]interface{}, verbose bool) {
+	method, _ := data["method"].(string)
+	if method == "session/update" {
+		params, _ := data["params"].(map[string]interface{})
+		update, _ := params["update"].(map[string]interface{})
+		if update == nil {
+			update = params
+		}
+		updateType, _ := update["sessionUpdate"].(string)
+		content, _ := update["content"].(map[string]interface{})
+		text, _ := content["text"].(string)
+		switch updateType {
+		case "agent_message_chunk":
+			if text != "" {
+				outputBuf.add(text, "message")
+			}
+		case "agent_thought_chunk":
+			if verbose && text != "" {
+				outputBuf.add(text, "thought")
+			}
+		}
+		return
+	}
+	if _, ok := data["result"]; ok {
+		flushBuffer()
+		outputBuf.mu.Lock()
+		outputBuf.shown = false
+		outputBuf.lastType = ""
+		outputBuf.mu.Unlock()
+		fmt.Printf("\n")
+	}
+}
+
 // handleMessage - Handle received messages (only show agent events)
 func handleMessage(msg Message, verbose bool) {
 	switch msg.Type {
@@ -198,58 +244,50 @@ func handleMessage(msg Message, verbose bool) {
 	case "heartbeat_ack":
 		return
 
-	case "chunk":
-		// ACP message
-		if data, ok := msg.Data["jsonrpc"].(string); ok && data == "2.0" {
-			if method, ok := msg.Data["method"].(string); ok {
-				if method == "session/update" {
-					if params, ok := msg.Data["params"].(map[string]interface{}); ok {
-						if update, ok := params["update"].(map[string]interface{}); ok {
-							if updateType, ok := update["sessionUpdate"].(string); ok {
-								switch updateType {
-								case "agent_message_chunk":
-									if content, ok := update["content"].(map[string]interface{}); ok {
-										if text, ok := content["text"].(string); ok {
-											outputBuf.add(text, "message")
-										}
-									}
-								case "agent_thought_chunk":
-									if verbose {
-										if content, ok := update["content"].(map[string]interface{}); ok {
-											if text, ok := content["text"].(string); ok {
-												outputBuf.add(text, "thought")
-											}
-										}
-									}
-								case "available_commands_update", "usage_update":
-									// Skip
-								default:
-									if verbose {
-										fmt.Printf("📨 update: %s\n", updateType)
-									}
-								}
-							}
-						}
-					}
-				}
-			} else if _, ok := msg.Data["result"]; ok {
-				// End of response - flush buffer and reset
-				flushBuffer()
-				outputBuf.mu.Lock()
-				outputBuf.shown = false
-				outputBuf.lastType = ""
-				outputBuf.mu.Unlock()
-				fmt.Printf("\n")
-				if verbose {
-					fmt.Printf("✅ Complete\n")
-				}
+	case "chunk", "thinking":
+		if text, ok := stringField(msg.Data, "content"); ok && text != "" {
+			kind := "message"
+			if msg.Type == "thinking" {
+				kind = "thought"
 			}
+			outputBuf.add(text, kind)
+			break
+		}
+		// Legacy raw ACP JSON-RPC forwarded as a chunk
+		if data, ok := msg.Data["jsonrpc"].(string); ok && data == "2.0" {
+			handleLegacyACPChunk(msg.Data, verbose)
+		}
+
+	case "result":
+		flushBuffer()
+		outputBuf.mu.Lock()
+		outputBuf.shown = false
+		outputBuf.lastType = ""
+		outputBuf.mu.Unlock()
+		fmt.Printf("\n")
+		if verbose {
+			fmt.Printf("✅ Complete %v\n", msg.Data["result"])
+		}
+
+	case "permission_request":
+		flushBuffer()
+		fmt.Printf("🔐 Permission requested: %v\n", msg.Data["tool_call"])
+		fmt.Printf("   Reply with WebSocket command approve or reject\n")
+
+	case "tool_call", "tool_call_update":
+		if verbose {
+			flushBuffer()
+			fmt.Printf("🔧 %s: %v\n", msg.Type, msg.Data["content"])
 		}
 
 	case "error":
+		flushBuffer()
 		if data, ok := msg.Data["message"].(string); ok {
-			flushBuffer()
 			fmt.Printf("❌ Error: %s\n", data)
+		} else if data, ok := msg.Data["content"].(string); ok {
+			fmt.Printf("❌ Error: %s\n", data)
+		} else {
+			fmt.Printf("❌ Error: %v\n", msg.Data)
 		}
 
 	default:

@@ -6,9 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"os/exec"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,31 +17,15 @@ import (
 	"openpal/internal/util"
 )
 
-// acpRequestPool - Pool for reusing ACP request maps (reduces GC pressure)
-var acpRequestPool = sync.Pool{
-	New: func() interface{} {
-		return make(map[string]interface{}, 4)
-	},
-}
+// ACP protocol JSON-RPC version used by Copilot and OpenCode.
+const acpProtocolVersion = 1
 
-// acpLineBufPool - Pool for reusing line read buffers (reduces allocations in sendRequest/Listen)
-var acpLineBufPool = sync.Pool{
-	New: func() interface{} {
-		buf := make([]byte, 0, 4096)
-		return &buf
-	},
-}
+const (
+	acpInitTimeout    = 30 * time.Second
+	acpSessionTimeout = 30 * time.Second
+)
 
-// acpIDPool - Pool for reusable int64 IDs (avoids allocation for request IDs)
-// Optimization 2026-02-24 14:00: Reduces allocation overhead in high-frequency ACP requests
-var acpIDPool = sync.Pool{
-	New: func() interface{} {
-		id := new(int64)
-		return id
-	},
-}
-
-// ACPMessage ACP ProtocolMessage
+// ACPMessage ACP Protocol Message
 type ACPMessage struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      *int64          `json:"id,omitempty"`
@@ -57,11 +42,12 @@ type ACPError struct {
 	Data    string `json:"data,omitempty"`
 }
 
-// ACPSessionUpdate - ACP session Update notification
+// ACPSessionUpdate - ACP session Update notification (flattened params used by Copilot/OpenCode)
 type ACPSessionUpdate struct {
-	SessionID     string     `json:"sessionId"`
-	SessionUpdate string     `json:"sessionUpdate"`
-	Content       ACPContent `json:"content"`
+	SessionID     string          `json:"sessionId"`
+	SessionUpdate string          `json:"sessionUpdate"`
+	Content       ACPContent      `json:"content"`
+	Update        json.RawMessage `json:"update,omitempty"`
 }
 
 // ACPContent ACP Content
@@ -70,29 +56,73 @@ type ACPContent struct {
 	Text string `json:"text,omitempty"`
 }
 
-// ACPClient ACP client
+// ACPPermissionOption is one choice in session/request_permission.
+type ACPPermissionOption struct {
+	OptionID string `json:"optionId"`
+	Name     string `json:"name"`
+	Kind     string `json:"kind"`
+}
+
+type acpRPCMessage struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id,omitempty"`
+	Method  string          `json:"method,omitempty"`
+	Params  json.RawMessage `json:"params,omitempty"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   *ACPError       `json:"error,omitempty"`
+}
+
+type acpPendingCall struct {
+	ch chan acpRPCMessage
+}
+
+type acpPendingPermission struct {
+	id      json.RawMessage
+	options []ACPPermissionOption
+	params  json.RawMessage
+}
+
+// ACPClient ACP client. A single read loop owns stdout; requests wait on pending IDs.
 type ACPClient struct {
 	provider            string
 	cmd                 *exec.Cmd
-	cmdName             string // Command name for better error messages
+	cmdName             string
 	stdin               io.WriteCloser
 	stdout              io.ReadCloser
-	reader              *bufio.Reader // Reusable buffered reader for stdout
-	ptyMaster           *os.File      // PTY master (for providers requiring PTY)
+	stderr              io.ReadCloser
+	reader              *bufio.Reader
+	ptyMaster           *os.File
 	sessionID           string
 	seq                 int64
 	mu                  sync.Mutex
-	started             bool              // Track if client has been started
-	notificationHandler func(*ACPMessage) // Per-instance notification handler
-	customCLIPath       string            // Custom CLI path (optional)
+	writeMu             sync.Mutex
+	started             bool
+	notificationHandler func(*ACPMessage)
+	eventHandler        func(map[string]interface{})
+	customCLIPath       string
+	workDir             string
+
+	pending     map[string]*acpPendingCall
+	permissions []acpPendingPermission
+	loopDone    chan struct{}
+	cancelLoop  context.CancelFunc
+
+	caps acpAgentCapabilities
 }
 
-// NewACPClient Create ACP client
-func NewACPClient(provider, customCLIPath string) (*ACPClient, error) {
-	var cmd *exec.Cmd
-	var cmdName string
+type acpAgentCapabilities struct {
+	loadSession bool
+	promptImage bool
+	promptAudio bool
+	embeddedCtx bool
+	mcpHTTP     bool
+	mcpSSE      bool
+}
 
-	// Use custom CLI path if provided, otherwise use default
+// NewACPClient Create ACP client for providers that speak ACP natively
+// (Copilot: `copilot --acp --stdio`, OpenCode: `opencode acp`).
+// Claude, Codex, and Gemini keep their own CLI protocols and are not ACP clients.
+func NewACPClient(provider, customCLIPath string) (*ACPClient, error) {
 	cliPath := customCLIPath
 	if cliPath == "" {
 		switch provider {
@@ -104,8 +134,8 @@ func NewACPClient(provider, customCLIPath string) (*ACPClient, error) {
 			return nil, fmt.Errorf("unsupported ACP provider: %s (supported: copilot, opencode)", provider)
 		}
 	}
-	cmdName = cliPath
 
+	var cmd *exec.Cmd
 	switch provider {
 	case "copilot", "copilot-acp":
 		cmd = exec.Command(cliPath, "--acp", "--stdio")
@@ -115,247 +145,429 @@ func NewACPClient(provider, customCLIPath string) (*ACPClient, error) {
 		return nil, fmt.Errorf("unsupported ACP provider: %s (supported: copilot, opencode)", provider)
 	}
 
-	// Don't start the process here - wait for Start() to be called
-	// This allows on-demand CLI startup
-
 	return &ACPClient{
 		provider:      provider,
 		cmd:           cmd,
-		cmdName:       cmdName, // Store command name for better error messages
+		cmdName:       cliPath,
 		customCLIPath: customCLIPath,
-		stdin:         nil, // Will be set in Start()
-		stdout:        nil, // Will be set in Start()
-		seq:           0,
+		pending:       make(map[string]*acpPendingCall),
 	}, nil
 }
 
-// Start Start ACP client (start process and initialize)
+// SetWorkDir sets the working directory used when spawning the agent process.
+func (c *ACPClient) SetWorkDir(dir string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.workDir = dir
+}
+
+// Start Start ACP client (spawn process, start read loop, initialize)
 func (c *ACPClient) Start() error {
 	c.mu.Lock()
-
-	// Prevent double-start
 	if c.started {
 		c.mu.Unlock()
 		util.DebugLog("[DEBUG] ACP client already started, skipping")
 		return nil
 	}
-
-	// Validate command before starting
 	if c.cmd == nil {
 		c.mu.Unlock()
 		return fmt.Errorf("ACP client command not initialized (provider=%s): check provider configuration", c.provider)
 	}
-
-	// Start the process if not already started
-	if c.stdin == nil || c.stdout == nil {
-		var err error
-
-		// OpenCode requires PTY for proper stdio communication
-		if c.provider == "opencode" {
-			// Use PTY for opencode (required for proper stdio handling)
-			c.ptyMaster, err = pty.Start(c.cmd)
-			if err != nil {
-				c.mu.Unlock()
-				if err.Error() == "executable file not found in $PATH" {
-					return fmt.Errorf("ACP CLI not found: '%s' is not installed or not in PATH (provider=%s). Install the CLI or check PATH configuration", c.cmdName, c.provider)
-				}
-				return fmt.Errorf("ACP PTY start failed (provider=%s, cmd=%s): %w", c.provider, c.cmdName, err)
-			}
-			// Use PTY master for both reading and writing
-			c.stdin = c.ptyMaster
-			c.stdout = c.ptyMaster
-			c.reader = bufio.NewReader(c.ptyMaster)
-			util.DebugLog("[DEBUG] ACP process started with PTY: PID=%d, provider=%s, cmd=%s", c.cmd.Process.Pid, c.provider, c.cmdName)
-		} else {
-			// Use stdin/stdout pipes for other providers (copilot)
-			c.stdin, err = c.cmd.StdinPipe()
-			if err != nil {
-				c.mu.Unlock()
-				return fmt.Errorf("ACP stdin pipe failed (provider=%s): %w", c.provider, err)
-			}
-
-			c.stdout, err = c.cmd.StdoutPipe()
-			if err != nil {
-				c.stdin.Close()
-				c.mu.Unlock()
-				return fmt.Errorf("ACP stdout pipe failed (provider=%s): %w", c.provider, err)
-			}
-
-			// Create reusable buffered reader for efficient reading
-			c.reader = bufio.NewReader(c.stdout)
-
-			if err := c.cmd.Start(); err != nil {
-				c.stdin.Close()
-				c.stdout.Close()
-				c.mu.Unlock()
-				if err.Error() == "executable file not found in $PATH" {
-					return fmt.Errorf("ACP CLI not found: '%s' is not installed or not in PATH (provider=%s). Install the CLI or check PATH configuration", c.cmdName, c.provider)
-				}
-				return fmt.Errorf("ACP process start failed (provider=%s, cmd=%s): %w", c.provider, c.cmdName, err)
-			}
-
-			util.DebugLog("[DEBUG] ACP process started: PID=%d, provider=%s, cmd=%s", c.cmd.Process.Pid, c.provider, c.cmdName)
-		}
+	if c.pending == nil {
+		c.pending = make(map[string]*acpPendingCall)
 	}
 
-	// Mark as started BEFORE releasing lock (to prevent re-entrancy during sendRequest)
+	if err := c.spawnLocked(); err != nil {
+		c.mu.Unlock()
+		return err
+	}
+
+	loopCtx, cancel := context.WithCancel(context.Background())
+	c.cancelLoop = cancel
+	c.loopDone = make(chan struct{})
 	c.started = true
 	c.mu.Unlock()
 
-	// Send initialize request and read response (MUST be outside lock to avoid deadlock)
-	initializeResult := make(map[string]interface{})
+	go c.readLoop(loopCtx)
+	if c.stderr != nil {
+		go c.drainStderr()
+	}
+
+	initResult := make(map[string]interface{})
 	err := c.sendRequest("initialize", map[string]interface{}{
-		"protocolVersion":    1, // ACP protocol version (must be <= 65535)
-		"clientCapabilities": map[string]interface{}{},
-	}, &initializeResult)
-
+		"protocolVersion": acpProtocolVersion,
+		"clientCapabilities": map[string]interface{}{
+			// Do not advertise fs/terminal: agents use their own tools.
+			"fs": map[string]interface{}{
+				"readTextFile":  false,
+				"writeTextFile": false,
+			},
+			"terminal": false,
+		},
+		"clientInfo": map[string]interface{}{
+			"name":    "openpal",
+			"version": "dev",
+		},
+	}, &initResult, acpInitTimeout)
 	if err != nil {
-		// Clean up on initialization failure
-		c.mu.Lock()
-		c.started = false
-		c.mu.Unlock()
-
-		if c.cmd.Process != nil {
-			c.cmd.Process.Kill()
-		}
-		if c.stdin != nil {
-			c.stdin.Close()
-		}
-		if c.stdout != nil {
-			c.stdout.Close()
-		}
-		c.stdout = nil
-		c.stdin = nil
+		c.Stop()
 		return fmt.Errorf("ACP initialize failed (provider=%s, cmd=%s): %w", c.provider, c.cmdName, err)
 	}
 
-	util.DebugLog("[DEBUG] ACP initialized: %+v", initializeResult)
+	caps := parseAgentCapabilities(initResult)
+	c.mu.Lock()
+	c.caps = caps
+	c.mu.Unlock()
+	util.DebugLog("[DEBUG] ACP initialized: %+v caps=%+v", initResult, caps)
 	return nil
+}
+
+func parseAgentCapabilities(result map[string]interface{}) acpAgentCapabilities {
+	var caps acpAgentCapabilities
+	if result == nil {
+		return caps
+	}
+	raw, _ := result["agentCapabilities"].(map[string]interface{})
+	if raw == nil {
+		return caps
+	}
+	caps.loadSession = jsonBool(raw["loadSession"])
+	if prompt, ok := raw["promptCapabilities"].(map[string]interface{}); ok {
+		caps.promptImage = jsonBool(prompt["image"])
+		caps.promptAudio = jsonBool(prompt["audio"])
+		caps.embeddedCtx = jsonBool(prompt["embeddedContext"])
+	}
+	if mcp, ok := raw["mcpCapabilities"].(map[string]interface{}); ok {
+		caps.mcpHTTP = jsonBool(mcp["http"])
+		caps.mcpSSE = jsonBool(mcp["sse"])
+	}
+	return caps
+}
+
+func jsonBool(v interface{}) bool {
+	b, _ := v.(bool)
+	return b
+}
+
+// SupportsLoadSession reports whether initialize advertised agentCapabilities.loadSession.
+func (c *ACPClient) SupportsLoadSession() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.caps.loadSession
+}
+
+// SupportsPromptImage reports whether the agent accepts image ContentBlocks.
+func (c *ACPClient) SupportsPromptImage() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.caps.promptImage
+}
+
+// SupportsMCPHTTP reports whether the agent accepts HTTP MCP servers.
+func (c *ACPClient) SupportsMCPHTTP() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.caps.mcpHTTP
+}
+
+// SupportsMCPSSE reports whether the agent accepts SSE MCP servers.
+func (c *ACPClient) SupportsMCPSSE() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.caps.mcpSSE
+}
+
+// SupportsEmbeddedContext reports whether the agent accepts resource ContentBlocks.
+func (c *ACPClient) SupportsEmbeddedContext() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.caps.embeddedCtx
+}
+
+func (c *ACPClient) spawnLocked() error {
+	if c.workDir != "" {
+		c.cmd.Dir = c.workDir
+	}
+	c.cmd.Env = os.Environ()
+
+	if c.provider == "opencode" {
+		var err error
+		c.ptyMaster, err = pty.Start(c.cmd)
+		if err != nil {
+			if isExecNotFound(err) {
+				return fmt.Errorf("ACP CLI not found: '%s' is not installed or not in PATH (provider=%s). Install the CLI or check PATH configuration", c.cmdName, c.provider)
+			}
+			return fmt.Errorf("ACP PTY start failed (provider=%s, cmd=%s): %w", c.provider, c.cmdName, err)
+		}
+		c.stdin = c.ptyMaster
+		c.stdout = c.ptyMaster
+		c.reader = bufio.NewReader(c.ptyMaster)
+		util.DebugLog("[DEBUG] ACP process started with PTY: PID=%d, provider=%s, cmd=%s", c.cmd.Process.Pid, c.provider, c.cmdName)
+		return nil
+	}
+
+	stdin, err := c.cmd.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("ACP stdin pipe failed (provider=%s): %w", c.provider, err)
+	}
+	stdout, err := c.cmd.StdoutPipe()
+	if err != nil {
+		stdin.Close()
+		return fmt.Errorf("ACP stdout pipe failed (provider=%s): %w", c.provider, err)
+	}
+	stderr, err := c.cmd.StderrPipe()
+	if err != nil {
+		stdin.Close()
+		stdout.Close()
+		return fmt.Errorf("ACP stderr pipe failed (provider=%s): %w", c.provider, err)
+	}
+
+	if err := c.cmd.Start(); err != nil {
+		stdin.Close()
+		stdout.Close()
+		stderr.Close()
+		if isExecNotFound(err) {
+			return fmt.Errorf("ACP CLI not found: '%s' is not installed or not in PATH (provider=%s). Install the CLI or check PATH configuration", c.cmdName, c.provider)
+		}
+		return fmt.Errorf("ACP process start failed (provider=%s, cmd=%s): %w", c.provider, c.cmdName, err)
+	}
+
+	c.stdin = stdin
+	c.stdout = stdout
+	c.stderr = stderr
+	c.reader = bufio.NewReader(stdout)
+	util.DebugLog("[DEBUG] ACP process started: PID=%d, provider=%s, cmd=%s", c.cmd.Process.Pid, c.provider, c.cmdName)
+	return nil
+}
+
+func isExecNotFound(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "executable file not found")
 }
 
 // NewSession - Create new session
 func (c *ACPClient) NewSession(cwd string, mcpServers []interface{}) (string, error) {
+	if mcpServers == nil {
+		mcpServers = []interface{}{}
+	}
 	var result struct {
 		SessionID string `json:"sessionId"`
 	}
-
 	params := map[string]interface{}{
 		"cwd":        cwd,
 		"mcpServers": mcpServers,
 	}
-
-	err := c.sendRequest("session/new", params, &result)
-	if err != nil {
+	if err := c.sendRequest("session/new", params, &result, acpSessionTimeout); err != nil {
 		util.DebugLog("[DEBUG] NewSession failed: %v", err)
 		return "", err
 	}
-
-	util.DebugLog("[DEBUG] NewSession created: %s", result.SessionID)
+	c.mu.Lock()
 	c.sessionID = result.SessionID
-
+	c.mu.Unlock()
+	util.DebugLog("[DEBUG] NewSession created: %s", result.SessionID)
 	return result.SessionID, nil
 }
 
-// Prompt Sendprompt
+// LoadSession resumes an existing ACP session when the agent advertises loadSession.
+func (c *ACPClient) LoadSession(sessionID, cwd string, mcpServers []interface{}) error {
+	if mcpServers == nil {
+		mcpServers = []interface{}{}
+	}
+	params := map[string]interface{}{
+		"sessionId":  sessionID,
+		"cwd":        cwd,
+		"mcpServers": mcpServers,
+	}
+	var result map[string]interface{}
+	if err := c.sendRequest("session/load", params, &result, acpSessionTimeout); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.sessionID = sessionID
+	c.mu.Unlock()
+	util.DebugLog("[DEBUG] LoadSession restored: %s", sessionID)
+	return nil
+}
+
+// Prompt sends session/prompt with a single text block.
 func (c *ACPClient) Prompt(prompt string) error {
-	if c.sessionID == "" {
+	return c.PromptWith(prompt, nil)
+}
+
+// PromptWith sends session/prompt with text plus optional ContentBlocks.
+// Updates stream via the notification handler; this call returns once the
+// request is written so the WebSocket loop stays responsive.
+func (c *ACPClient) PromptWith(prompt string, atts []PromptAttachment) error {
+	c.mu.Lock()
+	sessionID := c.sessionID
+	workDir := c.workDir
+	c.mu.Unlock()
+	if sessionID == "" {
 		return fmt.Errorf("no active session")
 	}
 
-	params := map[string]interface{}{
-		"sessionId": c.sessionID,
-		"prompt": []map[string]string{
-			{"type": "text", "text": prompt},
-		},
+	blocks, err := BuildPromptBlocks(prompt, atts, workDir)
+	if err != nil {
+		return err
 	}
 
-	return c.sendRequest("session/prompt", params, nil)
+	params := map[string]interface{}{
+		"sessionId": sessionID,
+		"prompt":    blocks,
+	}
+
+	go func() {
+		var result map[string]interface{}
+		if err := c.sendRequest("session/prompt", params, &result, 0); err != nil {
+			util.DebugLog("[DEBUG] session/prompt failed: %v", err)
+			c.emitEvent(map[string]interface{}{
+				"type":    "error",
+				"content": err.Error(),
+			})
+			return
+		}
+		c.emitEvent(map[string]interface{}{
+			"type":   "result",
+			"result": result,
+		})
+	}()
+	return nil
 }
 
-// Listen Listen ACP Message (uses shared reader to avoid stdout conflict)
-// Optimized: uses c.reader (shared with sendRequest) to prevent race conditions
+// Cancel sends session/cancel and rejects outstanding permission requests.
+func (c *ACPClient) Cancel() error {
+	c.mu.Lock()
+	sessionID := c.sessionID
+	c.mu.Unlock()
+	if sessionID == "" {
+		return nil
+	}
+
+	c.rejectPendingPermissions()
+	return c.sendNotification("session/cancel", map[string]interface{}{
+		"sessionId": sessionID,
+	})
+}
+
+// RespondPermission answers the oldest pending session/request_permission.
+func (c *ACPClient) RespondPermission(approve bool) error {
+	c.mu.Lock()
+	if len(c.permissions) == 0 {
+		c.mu.Unlock()
+		return fmt.Errorf("no pending ACP permission request")
+	}
+	p := c.permissions[0]
+	c.permissions = c.permissions[1:]
+	c.mu.Unlock()
+
+	outcome := permissionOutcome(p.options, approve)
+	return c.sendResponse(p.id, map[string]interface{}{
+		"outcome": outcome,
+	})
+}
+
+func permissionOutcome(options []ACPPermissionOption, approve bool) map[string]interface{} {
+	wantAllow := map[string]bool{"allow_once": true, "allow_always": true, "allow": true}
+	wantReject := map[string]bool{"reject_once": true, "reject_always": true, "reject": true}
+	want := wantReject
+	if approve {
+		want = wantAllow
+	}
+	for _, opt := range options {
+		if want[strings.ToLower(opt.Kind)] || (approve && strings.HasPrefix(strings.ToLower(opt.OptionID), "allow")) ||
+			(!approve && strings.HasPrefix(strings.ToLower(opt.OptionID), "reject")) {
+			return map[string]interface{}{
+				"outcome":  "selected",
+				"optionId": opt.OptionID,
+			}
+		}
+	}
+	if len(options) > 0 && approve {
+		return map[string]interface{}{
+			"outcome":  "selected",
+			"optionId": options[0].OptionID,
+		}
+	}
+	return map[string]interface{}{"outcome": "cancelled"}
+}
+
+func (c *ACPClient) rejectPendingPermissions() {
+	c.mu.Lock()
+	pending := c.permissions
+	c.permissions = nil
+	c.mu.Unlock()
+	for _, p := range pending {
+		_ = c.sendResponse(p.id, map[string]interface{}{
+			"outcome": map[string]interface{}{"outcome": "cancelled"},
+		})
+	}
+}
+
+// Listen is retained for tests. Production uses the internal read loop.
 func (c *ACPClient) Listen(ctx context.Context, handler func(*ACPMessage)) error {
+	c.mu.Lock()
 	reader := c.reader
+	c.mu.Unlock()
 	if reader == nil {
 		return fmt.Errorf("ACP reader not initialized")
 	}
-
-	// Get line buffer from pool (reduces allocations)
-	lineBufPtr := acpLineBufPool.Get().(*[]byte)
-	defer acpLineBufPool.Put(lineBufPtr)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		// Read line using shared reader (avoids conflict with sendRequest)
-		*lineBufPtr = (*lineBufPtr)[:0] // Reset buffer
-		line, err := reader.ReadBytes('\n')
-		if err != nil {
-			if err == io.EOF {
-				return nil
-			}
-			return err
-		}
-
-		if len(line) == 0 {
-			continue
-		}
-
-		var msg ACPMessage
-		if err := json.Unmarshal(line, &msg); err != nil {
-			util.DebugLog("[DEBUG] Listen parse error: %v", err)
-			continue
-		}
-
-		handler(&msg)
+	if handler != nil {
+		c.SetNotificationHandler(handler)
 	}
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 // Stop Stop ACP client
 func (c *ACPClient) Stop() error {
-	if c.cmd != nil && c.cmd.Process != nil {
-		if err := c.cmd.Process.Kill(); err != nil {
-			return fmt.Errorf("kill ACP process (PID=%d): %w", c.cmd.Process.Pid, err)
-		}
-	}
+	_ = c.Cancel()
 
-	// Close PTY master if using PTY mode
+	c.mu.Lock()
+	if c.cancelLoop != nil {
+		c.cancelLoop()
+	}
+	loopDone := c.loopDone
+	c.failPendingLocked(fmt.Errorf("ACP client stopped"))
+	c.started = false
+	c.sessionID = ""
+	c.mu.Unlock()
+
+	if c.cmd != nil && c.cmd.Process != nil {
+		_ = c.cmd.Process.Kill()
+	}
 	if c.ptyMaster != nil {
-		if err := c.ptyMaster.Close(); err != nil {
-			util.DebugLog("[DEBUG] Failed to close PTY master: %v", err)
-		}
+		_ = c.ptyMaster.Close()
 		c.ptyMaster = nil
 	}
-
-	// Close stdin if not using PTY mode
 	if c.stdin != nil && c.stdin != c.ptyMaster {
 		c.stdin.Close()
 		c.stdin = nil
 	}
-
-	// Close stdout if not using PTY mode
 	if c.stdout != nil && c.stdout != c.ptyMaster {
 		c.stdout.Close()
 		c.stdout = nil
 	}
-
+	if c.stderr != nil {
+		c.stderr.Close()
+		c.stderr = nil
+	}
+	if loopDone != nil {
+		select {
+		case <-loopDone:
+		case <-time.After(2 * time.Second):
+		}
+	}
 	return nil
 }
 
 // Pid GetProcess ID
 func (c *ACPClient) Pid() int {
-	if c.cmd != nil {
+	if c.cmd != nil && c.cmd.Process != nil {
 		return c.cmd.Process.Pid
 	}
 	return 0
 }
 
 // GetReader - Get the shared buffered reader for ACP output
-// Used by the server to forward ACP output without creating a competing reader
 func (c *ACPClient) GetReader() io.Reader {
 	if c.reader != nil {
 		return c.reader
@@ -370,224 +582,329 @@ func (c *ACPClient) GetSessionID() string {
 	return c.sessionID
 }
 
-// SetNotificationHandler - Set callback for notifications (called when notifications arrive during request)
-// This is a per-instance handler, allowing different handlers for different ACP clients
+// SetNotificationHandler - Set callback for notifications
 func (c *ACPClient) SetNotificationHandler(handler func(*ACPMessage)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.notificationHandler = handler
 }
 
-// acpResponsePool - Pool for reusing response maps in sendRequest
-// Reduces allocations in response parsing hot path
-var acpResponsePool = sync.Pool{
-	New: func() interface{} {
-		return make(map[string]interface{}, 8)
-	},
+// SetEventHandler sets the parsed-event callback used by the WebSocket server.
+func (c *ACPClient) SetEventHandler(handler func(map[string]interface{})) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.eventHandler = handler
 }
 
-// sendRequestTimeout - Default timeout for ACP requests
-const sendRequestTimeout = 30 * time.Second
-
-// maxReadAttempts - Maximum read attempts before timeout (prevents infinite loops)
-// 30 attempts with typical read latency = ~3-5 seconds, well within sendRequestTimeout
-const maxReadAttempts = 30
-
-// sendRequest - Send ACP request and read response (handles notifications)
-// Uses pooled maps to reduce allocations, handles notifications that arrive before responses
-// Optimized 2026-02-24: Pre-cache handler/reader, eliminate redundant JSON marshal for result passthrough
-// Further optimized 2026-02-24 11:00: Reduced allocations in notification handling
-// Optimization 2026-02-24 14:00: Use pooled ID allocation, reduce map operations
-// Performance: ~3-8μs per request (dominated by I/O and JSON parsing)
-func (c *ACPClient) sendRequest(method string, params interface{}, result interface{}) error {
+func (c *ACPClient) sendRequest(method string, params interface{}, result interface{}, timeout time.Duration) error {
 	c.mu.Lock()
 	c.seq++
 	id := c.seq
-
-	// Pre-cache reader and handler before releasing lock (avoids repeated field access in loop)
-	reader := c.reader
-	handler := c.notificationHandler
+	idKey := strconv.FormatInt(id, 10)
+	call := &acpPendingCall{ch: make(chan acpRPCMessage, 1)}
+	if c.pending == nil {
+		c.pending = make(map[string]*acpPendingCall)
+	}
+	c.pending[idKey] = call
 	c.mu.Unlock()
 
-	// Build request message using pool (outside lock for better concurrency)
-	msg := acpRequestPool.Get().(map[string]interface{})
-	msg["jsonrpc"] = "2.0"
-	// Use pooled ID to avoid allocation (optimization for high-frequency requests)
-	idPtr := acpIDPool.Get().(*int64)
-	*idPtr = id
-	msg["id"] = idPtr
-	msg["method"] = method
-	msg["params"] = params
-
-	data, err := json.Marshal(msg)
-	// Return ID to pool after marshaling (ID is copied to JSON)
-	acpIDPool.Put(idPtr)
-	clear(msg)
-	acpRequestPool.Put(msg)
-
-	if err != nil {
-		return fmt.Errorf("ACP marshal error (method=%s): %w", method, err)
+	msg := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"method":  method,
+		"params":  params,
+	}
+	if err := c.writeJSON(msg); err != nil {
+		c.mu.Lock()
+		delete(c.pending, idKey)
+		c.mu.Unlock()
+		return fmt.Errorf("ACP write error (method=%s): %w", method, err)
 	}
 
-	if _, err := c.stdin.Write(append(data, '\n')); err != nil {
-		return fmt.Errorf("ACP write error (method=%s): stdin closed", method)
+	wait := timeout
+	if wait <= 0 {
+		wait = 24 * time.Hour
 	}
 
-	// Fast path: no result needed (fire-and-forget)
-	if result == nil {
+	select {
+	case resp, ok := <-call.ch:
+		if !ok {
+			return fmt.Errorf("ACP closed (method=%s)", method)
+		}
+		if resp.Error != nil {
+			return fmt.Errorf("ACP error (method=%s, code=%d): %s", method, resp.Error.Code, resp.Error.Message)
+		}
+		if result == nil || len(resp.Result) == 0 || string(resp.Result) == "null" {
+			return nil
+		}
+		if err := json.Unmarshal(resp.Result, result); err != nil {
+			return fmt.Errorf("ACP result unmarshal error (method=%s): %w", method, err)
+		}
+		return nil
+	case <-time.After(wait):
+		c.mu.Lock()
+		delete(c.pending, idKey)
+		c.mu.Unlock()
+		return fmt.Errorf("ACP timeout (method=%s)", method)
+	}
+}
+
+func (c *ACPClient) sendNotification(method string, params interface{}) error {
+	return c.writeJSON(map[string]interface{}{
+		"jsonrpc": "2.0",
+		"method":  method,
+		"params":  params,
+	})
+}
+
+func (c *ACPClient) sendResponse(id json.RawMessage, result interface{}) error {
+	return c.writeJSON(map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      jsonRawOrNil(id),
+		"result":  result,
+	})
+}
+
+func (c *ACPClient) sendError(id json.RawMessage, code int, message string) error {
+	return c.writeJSON(map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      jsonRawOrNil(id),
+		"error": map[string]interface{}{
+			"code":    code,
+			"message": message,
+		},
+	})
+}
+
+func jsonRawOrNil(id json.RawMessage) interface{} {
+	if len(id) == 0 {
 		return nil
 	}
+	var v interface{}
+	if err := json.Unmarshal(id, &v); err != nil {
+		return nil
+	}
+	return v
+}
 
+func (c *ACPClient) writeJSON(msg interface{}) error {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if c.stdin == nil {
+		return fmt.Errorf("stdin closed")
+	}
+	_, err = c.stdin.Write(append(data, '\n'))
+	return err
+}
+
+func (c *ACPClient) readLoop(ctx context.Context) {
+	defer close(c.loopDone)
+
+	c.mu.Lock()
+	reader := c.reader
+	c.mu.Unlock()
 	if reader == nil {
-		return fmt.Errorf("ACP reader not initialized")
+		return
 	}
 
-	lineBufPtr := acpLineBufPool.Get().(*[]byte)
-	defer acpLineBufPool.Put(lineBufPtr)
-
-	response := acpResponsePool.Get().(map[string]interface{})
-	defer func() { clear(response); acpResponsePool.Put(response) }()
-
-	ctx, cancel := context.WithTimeout(context.Background(), sendRequestTimeout)
-	defer cancel()
-
-	for readCount := 0; readCount < maxReadAttempts; readCount++ {
+	for {
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("ACP timeout (method=%s): %w", method, ctx.Err())
+			return
 		default:
 		}
 
-		*lineBufPtr = (*lineBufPtr)[:0]
 		line, err := reader.ReadBytes('\n')
 		if err != nil {
-			if err == io.EOF {
-				return fmt.Errorf("ACP EOF (method=%s)", method)
+			if err != io.EOF {
+				util.DebugLog("[DEBUG] ACP read loop error: %v", err)
 			}
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				continue
-			}
-			return fmt.Errorf("ACP read error (method=%s): %w", method, err)
+			c.mu.Lock()
+			c.failPendingLocked(fmt.Errorf("ACP EOF"))
+			c.mu.Unlock()
+			return
 		}
-
+		line = bytesTrimSpace(line)
 		if len(line) == 0 {
 			continue
 		}
-
-		clear(response)
-		if err := json.Unmarshal(line, &response); err != nil {
-			return fmt.Errorf("ACP parse error (method=%s)", method)
-		}
-
-		// Handle notification (no id field) - optimized fast path
-		// Further optimized 2026-02-24: Avoid JSON marshal for notification params when possible
-		idVal, hasID := response["id"]
-		if !hasID || idVal == nil {
-			if handler != nil {
-				if methodVal, ok := response["method"].(string); ok {
-					// Optimized: pass raw params without marshaling (handler can unmarshal if needed)
-					notif := ACPMessage{Method: methodVal}
-					if paramsRaw, ok := response["params"]; ok {
-						// Lazy marshal - only marshal if handler actually needs it
-						notif.Params, _ = json.Marshal(paramsRaw)
-					}
-					handler(&notif)
-				}
-			}
-			continue
-		}
-
-		// Check if this is our response (float64 comparison for JSON numbers)
-		if respID, ok := idVal.(float64); !ok || respID != float64(id) {
-			continue
-		}
-
-		// Skip echoed requests: some providers (e.g., opencode) echo the request
-		// back before sending the actual response. An echoed request has a "method"
-		// field but no "result" or "error" field.
-		if _, hasMethod := response["method"]; hasMethod {
-			if _, hasResult := response["result"]; !hasResult {
-				if _, hasError := response["error"]; !hasError {
-					continue
-				}
-			}
-		}
-
-		// Handle error response - optimized with early return
-		if errMsg, ok := response["error"]; ok && errMsg != nil {
-			if errMap, ok := errMsg.(map[string]interface{}); ok {
-				return fmt.Errorf("ACP error (method=%s, code=%d): %s", method,
-					int(util.GetFloat64(errMap, "code")), util.GetString(errMap, "message"))
-			}
-			return fmt.Errorf("ACP error (method=%s): %v", method, errMsg)
-		}
-
-		// Handle successful response - optimized: direct type assertion when result is map
-		if respResult, ok := response["result"]; ok && respResult != nil {
-			// Fast path: if result is already the target type, use direct assignment
-			if resultPtr, ok := result.(*map[string]interface{}); ok {
-				if resultMap, ok := respResult.(map[string]interface{}); ok {
-					// Direct copy avoids marshal/unmarshal overhead
-					*resultPtr = util.CloneMap(resultMap)
-					return nil
-				}
-			}
-			// Fallback: generic unmarshal for other types
-			resultData, err := json.Marshal(respResult)
-			if err != nil {
-				return fmt.Errorf("ACP result marshal error (method=%s): %w", method, err)
-			}
-			if err := json.Unmarshal(resultData, result); err != nil {
-				return fmt.Errorf("ACP result unmarshal error (method=%s): %w", method, err)
-			}
-		}
-
-		return nil
+		c.dispatchLine(line)
 	}
-
-	return fmt.Errorf("ACP timeout (method=%s): no response after %d reads", method, maxReadAttempts)
 }
 
-// Note: setReadDeadline removed - was a no-op since pipes don't support deadlines
-// The context timeout in sendRequest provides sufficient application-level timeout
-// Removing this function eliminates ~5ns call overhead per read iteration
+func bytesTrimSpace(b []byte) []byte {
+	return []byte(strings.TrimSpace(string(b)))
+}
 
-// ParseMessage Parse ACP Messageto Bridge Event
-func (c *ACPClient) ParseMessage(msg *ACPMessage) map[string]interface{} {
-	// HandleNotification
-	if msg.Method == "session/update" {
-		var update ACPSessionUpdate
-		if err := json.Unmarshal(msg.Params, &update); err != nil {
-			return map[string]interface{}{
-				"type":    "error",
-				"content": fmt.Sprintf("Failed to parse update: %v", err),
-			}
-		}
+func (c *ACPClient) dispatchLine(line []byte) {
+	var msg acpRPCMessage
+	if err := json.Unmarshal(line, &msg); err != nil {
+		util.DebugLog("[DEBUG] ACP parse error: %v", err)
+		return
+	}
 
-		// According to new type, return not same format
-		switch update.SessionUpdate {
-		case "agent_message_chunk":
-			return map[string]interface{}{
-				"type":    "chunk",
-				"content": update.Content.Text,
-				"format":  update.Content.Type, // text, markdown, etc.
-			}
+	idKey := jsonIDKey(msg.ID)
+	hasID := idKey != ""
+	hasMethod := msg.Method != ""
+	hasResult := len(msg.Result) > 0 || msg.Error != nil
 
-		case "agent_state":
-			return map[string]interface{}{
-				"type":  "status",
-				"state": update.Content.Type,
-			}
-
-		default:
-			return map[string]interface{}{
-				"type":    "update",
-				"content": update,
-			}
+	// OpenCode echoes client requests; skip those.
+	if hasID && hasMethod && !hasResult {
+		c.mu.Lock()
+		_, ours := c.pending[idKey]
+		c.mu.Unlock()
+		if ours {
+			return
 		}
 	}
 
-	// HandleResponse
+	if hasID && !hasMethod {
+		c.mu.Lock()
+		call, ok := c.pending[idKey]
+		if ok {
+			delete(c.pending, idKey)
+		}
+		c.mu.Unlock()
+		if ok {
+			select {
+			case call.ch <- msg:
+			default:
+			}
+		}
+		return
+	}
+
+	if hasMethod && hasID {
+		c.handleIncomingRequest(msg)
+		return
+	}
+
+	if hasMethod {
+		c.handleNotification(msg)
+	}
+}
+
+func (c *ACPClient) handleIncomingRequest(msg acpRPCMessage) {
+	switch msg.Method {
+	case "session/request_permission":
+		c.handlePermissionRequest(msg)
+	default:
+		util.DebugLog("[DEBUG] ACP unsupported agent method %s", msg.Method)
+		_ = c.sendError(msg.ID, -32601, "Method not found")
+	}
+}
+
+func (c *ACPClient) handlePermissionRequest(msg acpRPCMessage) {
+	var params struct {
+		SessionID string                `json:"sessionId"`
+		Options   []ACPPermissionOption `json:"options"`
+		ToolCall  json.RawMessage       `json:"toolCall"`
+	}
+	_ = json.Unmarshal(msg.Params, &params)
+
+	c.mu.Lock()
+	c.permissions = append(c.permissions, acpPendingPermission{
+		id:      append(json.RawMessage(nil), msg.ID...),
+		options: params.Options,
+		params:  msg.Params,
+	})
+	c.mu.Unlock()
+
+	event := map[string]interface{}{
+		"type":       "permission_request",
+		"session_id": params.SessionID,
+		"options":    params.Options,
+	}
+	if len(params.ToolCall) > 0 {
+		var tool interface{}
+		if json.Unmarshal(params.ToolCall, &tool) == nil {
+			event["tool_call"] = tool
+		}
+	}
+	c.emitEvent(event)
+}
+
+func (c *ACPClient) handleNotification(msg acpRPCMessage) {
+	acpMsg := &ACPMessage{
+		JSONRPC: msg.JSONRPC,
+		Method:  msg.Method,
+		Params:  msg.Params,
+		Result:  msg.Result,
+		Error:   msg.Error,
+	}
+	c.mu.Lock()
+	handler := c.notificationHandler
+	c.mu.Unlock()
+	if handler != nil {
+		handler(acpMsg)
+	}
+	c.emitEvent(c.ParseMessage(acpMsg))
+}
+
+func (c *ACPClient) emitEvent(event map[string]interface{}) {
+	if event == nil {
+		return
+	}
+	c.mu.Lock()
+	h := c.eventHandler
+	c.mu.Unlock()
+	if h != nil {
+		h(event)
+	}
+}
+
+func (c *ACPClient) failPendingLocked(err error) {
+	for key, call := range c.pending {
+		select {
+		case call.ch <- acpRPCMessage{Error: &ACPError{Code: -32000, Message: err.Error()}}:
+		default:
+		}
+		delete(c.pending, key)
+	}
+}
+
+func (c *ACPClient) drainStderr() {
+	if c.stderr == nil {
+		return
+	}
+	scanner := bufio.NewScanner(c.stderr)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line != "" {
+			util.DebugLog("[DEBUG] ACP stderr: %s", line)
+		}
+	}
+}
+
+func jsonIDKey(id json.RawMessage) string {
+	if len(id) == 0 || string(id) == "null" {
+		return ""
+	}
+	var n json.Number
+	if err := json.Unmarshal(id, &n); err == nil {
+		return n.String()
+	}
+	var s string
+	if err := json.Unmarshal(id, &s); err == nil {
+		return s
+	}
+	return strings.TrimSpace(string(id))
+}
+
+// ParseMessage Parse ACP Message to Bridge Event
+func (c *ACPClient) ParseMessage(msg *ACPMessage) map[string]interface{} {
+	if msg == nil {
+		return map[string]interface{}{"type": "unknown"}
+	}
+
+	if msg.Method == "session/update" {
+		return parseSessionUpdate(msg.Params)
+	}
+
 	if msg.Result != nil {
 		var result map[string]interface{}
 		if err := json.Unmarshal(msg.Result, &result); err == nil {
@@ -598,7 +915,6 @@ func (c *ACPClient) ParseMessage(msg *ACPMessage) map[string]interface{} {
 		}
 	}
 
-	// Handle error
 	if msg.Error != nil {
 		return map[string]interface{}{
 			"type":    "error",
@@ -607,9 +923,85 @@ func (c *ACPClient) ParseMessage(msg *ACPMessage) map[string]interface{} {
 		}
 	}
 
-	// UnknownMessagetype
 	return map[string]interface{}{
 		"type":    "unknown",
 		"message": msg,
 	}
+}
+
+func parseSessionUpdate(params json.RawMessage) map[string]interface{} {
+	if len(params) == 0 {
+		return map[string]interface{}{
+			"type":    "error",
+			"content": "Failed to parse update: empty params",
+		}
+	}
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(params, &raw); err != nil {
+		return map[string]interface{}{
+			"type":    "error",
+			"content": fmt.Sprintf("Failed to parse update: %v", err),
+		}
+	}
+
+	updateType, content := sessionUpdateFields(raw)
+	switch updateType {
+	case "agent_message_chunk", "agent_thought_chunk":
+		text, format := contentText(content)
+		eventType := "chunk"
+		if updateType == "agent_thought_chunk" {
+			eventType = "thinking"
+		}
+		return map[string]interface{}{
+			"type":    eventType,
+			"content": text,
+			"format":  format,
+		}
+	case "agent_state":
+		stateType := ""
+		if m, ok := content.(map[string]interface{}); ok {
+			stateType, _ = m["type"].(string)
+		}
+		return map[string]interface{}{
+			"type":  "status",
+			"state": stateType,
+		}
+	case "tool_call", "tool_call_update":
+		return map[string]interface{}{
+			"type":    updateType,
+			"content": content,
+			"data":    raw,
+		}
+	default:
+		if updateType == "" {
+			return map[string]interface{}{
+				"type":    "update",
+				"content": raw,
+			}
+		}
+		return map[string]interface{}{
+			"type":    "update",
+			"content": raw,
+		}
+	}
+}
+
+func sessionUpdateFields(raw map[string]interface{}) (string, interface{}) {
+	if nested, ok := raw["update"].(map[string]interface{}); ok {
+		t, _ := nested["sessionUpdate"].(string)
+		return t, nested["content"]
+	}
+	t, _ := raw["sessionUpdate"].(string)
+	return t, raw["content"]
+}
+
+func contentText(content interface{}) (string, string) {
+	m, ok := content.(map[string]interface{})
+	if !ok {
+		return "", ""
+	}
+	text, _ := m["text"].(string)
+	format, _ := m["type"].(string)
+	return text, format
 }

@@ -205,21 +205,29 @@ func NewManager(sessionDir string) *Manager {
 
 // SetProvider - Set the AI provider for session recovery
 func (m *Manager) SetProvider(provider string) {
+	m.mu.Lock()
 	m.provider = provider
+	m.mu.Unlock()
 }
 
 // SetSessionID - Set the CLI session ID for history recovery
 func (m *Manager) SetSessionID(sessionID string) {
+	m.mu.Lock()
 	m.sessionID = sessionID
+	m.mu.Unlock()
 }
 
 // GetProvider - Get the AI provider
 func (m *Manager) GetProvider() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.provider
 }
 
 // GetSessionID - Get the CLI session ID
 func (m *Manager) GetSessionID() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.sessionID
 }
 
@@ -227,21 +235,23 @@ func (m *Manager) GetSessionID() string {
 // This is called on cache miss to retrieve historical messages from the CLI's session files
 // Supports: Claude (JSONL), Codex (SQLite + JSONL), Gemini (JSON)
 func (m *Manager) RecoverSessionFromCLI() ([]Event, error) {
-	if m.provider == "" || m.sessionID == "" {
+	provider := m.GetProvider()
+	sessionID := m.GetSessionID()
+	if provider == "" || sessionID == "" {
 		return nil, nil // No recovery possible without provider/session
 	}
 
 	// Create session reader for the provider
-	reader := adapter.CreateSessionReader(m.provider, m.sessionDir)
+	reader := adapter.CreateSessionReader(provider, m.sessionDir)
 	if reader == nil {
 		return nil, nil // Provider not supported for recovery
 	}
 
 	// Read session events
-	sessionEvents, err := reader.ReadSession(m.sessionID)
+	sessionEvents, err := reader.ReadSession(sessionID)
 	if err != nil {
 		// Session not found or read error - not fatal, just return nil
-		util.DebugLog("[DEBUG] session recovery failed for %s/%s: %v", m.provider, m.sessionID, err)
+		util.DebugLog("[DEBUG] session recovery failed for %s/%s: %v", provider, sessionID, err)
 		return nil, nil
 	}
 
@@ -256,7 +266,7 @@ func (m *Manager) RecoverSessionFromCLI() ([]Event, error) {
 		}
 	}
 
-	util.DebugLog("[DEBUG] recovered %d events from %s session %s", len(events), m.provider, m.sessionID)
+	util.DebugLog("[DEBUG] recovered %d events from %s session %s", len(events), provider, sessionID)
 	return events, nil
 }
 
