@@ -33,7 +33,7 @@ const (
 	WriteTimeout      = 10 * time.Second
 	PongTimeout       = 60 * time.Second
 	PingInterval      = 30 * time.Second
-	MaxMessageSize    = 4096
+	MaxMessageSize    = 12 << 20 // 12 MiB to allow base64 image attachments
 	HeartbeatInterval = 10 * time.Second
 
 	// Performance tuning
@@ -151,8 +151,12 @@ var upgrader = websocket.Upgrader{
 
 // InputMessage - Message to send to CLI
 type InputMessage struct {
-	Content string
-	Type    string // "task" or "input"
+	Content       string
+	Type          string // "task" or "input"
+	Attachments   []adapter.PromptAttachment
+	MCPServers    []adapter.MCPServer
+	HasMCPServers bool
+	SessionID     string
 }
 
 // connectionStats - Statistics for connection tracking
@@ -1033,9 +1037,9 @@ func (s *WebSocketServer) attemptReconnect(client *WebSocketClient) {
 	// listen() goroutine will exit, but ping goroutine should have already stopped
 }
 
-// startCLI - Start CLI with the given task content (extracted for reusability)
-func (s *WebSocketServer) startCLI(taskContent string) error {
-	s.cliAdapter.SetTask(taskContent)
+// startCLI - Start CLI with the given task (extracted for reusability)
+func (s *WebSocketServer) startCLI(msg InputMessage) error {
+	s.cliAdapter.SetTask(msg.Content)
 
 	if s.cliAdapter.GetProvider() == "claude" {
 		type sessionInitializer interface {
@@ -1051,6 +1055,17 @@ func (s *WebSocketServer) startCLI(taskContent string) error {
 
 	if s.cliAdapter.GetMode() == adapter.ModeACP {
 		s.cliAdapter.SetACPEventHandler(s.emitACPEvent)
+		if msg.HasMCPServers {
+			s.cliAdapter.SetMCPServers(msg.MCPServers)
+		}
+		resume := strings.TrimSpace(msg.SessionID)
+		if resume == "" {
+			resume = readACPSessionID(s.sessionDir, s.taskID)
+		}
+		if resume == "" {
+			resume = s.stateMgr.GetSessionID()
+		}
+		s.cliAdapter.SetResumeSessionID(resume)
 	}
 
 	cli, err := s.cliAdapter.Start()
@@ -1070,8 +1085,11 @@ func (s *WebSocketServer) startCLI(taskContent string) error {
 		if sid := s.cliAdapter.ACPSessionID(); sid != "" {
 			s.stateMgr.SetSessionID(sid)
 			s.stateMgr.SetProvider(s.cliAdapter.GetProvider())
+			if err := writeACPSessionID(s.sessionDir, s.taskID, sid); err != nil {
+				util.DebugLog("[DEBUG] startCLI: persist ACP session id: %v", err)
+			}
 		}
-		if err := s.cliAdapter.SendACPPrompt(taskContent); err != nil {
+		if err := s.cliAdapter.SendACPPromptWith(msg.Content, msg.Attachments); err != nil {
 			return fmt.Errorf("failed to send prompt: %w", err)
 		}
 		// The ACP read loop owns stdout. Only forward stderr if the process has one.
@@ -1092,7 +1110,7 @@ func (s *WebSocketServer) startCLI(taskContent string) error {
 		EncodeStdinMessage(text string) ([]byte, error)
 	}
 	if enc, ok := s.cliAdapter.GetAdapter().(stdinEncoder); ok {
-		data, err := enc.EncodeStdinMessage(taskContent)
+		data, err := enc.EncodeStdinMessage(msg.Content)
 		if err != nil {
 			return fmt.Errorf("failed to encode prompt: %w", err)
 		}
@@ -1154,14 +1172,14 @@ func (s *WebSocketServer) processInputQueue() {
 			s.mu.RUnlock()
 
 			if !cliAlive {
-				if err := s.startCLI(inputMsg.Content); err != nil {
+				if err := s.startCLI(inputMsg); err != nil {
 					s.errorCh <- err
 				}
 				continue
 			}
 
 			if s.cliAdapter.GetMode() == adapter.ModeACP {
-				if err := s.cliAdapter.SendACPPrompt(inputMsg.Content); err != nil {
+				if err := s.cliAdapter.SendACPPromptWith(inputMsg.Content, inputMsg.Attachments); err != nil {
 					s.errorCh <- fmt.Errorf("send input: %w", err)
 				}
 			} else {
@@ -1273,17 +1291,21 @@ func handleHeartbeat(s *WebSocketServer, msg *ClientMessage, client *WebSocketCl
 // handleStartTask - Handle start_task command
 // Optimization 2026-02-24 13:00: Consistent pointer usage for msg parameter
 func handleStartTask(s *WebSocketServer, msg *ClientMessage, client *WebSocketClient) {
-	if task, ok := msg.Data["task"].(string); ok {
-		s.queueInputWithLogging("task", task)
+	input := parseClientInput("task", msg.Data)
+	if input.Content == "" && len(input.Attachments) == 0 {
+		return
 	}
+	s.queueInput(input)
 }
 
 // handleSendInput - Handle send_input command
 // Optimization 2026-02-24 13:00: Consistent pointer usage for msg parameter
 func handleSendInput(s *WebSocketServer, msg *ClientMessage, client *WebSocketClient) {
-	if content, ok := msg.Data["content"].(string); ok {
-		s.queueInputWithLogging("input", content)
+	input := parseClientInput("input", msg.Data)
+	if input.Content == "" && len(input.Attachments) == 0 {
+		return
 	}
+	s.queueInput(input)
 }
 
 // drainInputQueue - Helper to drain input queue and return count of drained messages
@@ -2157,26 +2179,23 @@ func generateDeviceID() string {
 // Enhanced: non-blocking queue send with overflow protection, queue depth tracking
 // Optimized: single atomic operation for CLI start check (avoids double-check pattern)
 func (s *WebSocketServer) queueInputWithLogging(entryType, content string) {
-	// Non-blocking send to input queue (prevents deadlock if queue is full)
-	inputMsg := InputMessage{
+	s.queueInput(InputMessage{
 		Content: content,
 		Type:    entryType,
-	}
+	})
+}
 
+func (s *WebSocketServer) queueInput(inputMsg InputMessage) {
 	select {
 	case s.inputQueue <- inputMsg:
-		// Successfully queued - start CLI processor if not already started
-		// Optimized: single CompareAndSwap handles both check and set atomically
 		if s.cliAdapter != nil && s.cliStarted.CompareAndSwap(false, true) {
 			go s.processInputQueue()
 		}
 	case <-s.ctx.Done():
-		// Server shutting down, discard message
-		util.DebugLog("[DEBUG] queueInputWithLogging: server shutting down, discarding message")
+		util.DebugLog("[DEBUG] queueInput: server shutting down, discarding message")
 	default:
-		// Queue full - track dropped message and log warning
 		atomic.AddInt64(&s.stats.inputDropped, 1)
-		util.DebugLog("[DEBUG] queueInputWithLogging: input queue full (depth=%d), dropping message", len(s.inputQueue))
+		util.DebugLog("[DEBUG] queueInput: input queue full (depth=%d), dropping message", len(s.inputQueue))
 	}
 }
 

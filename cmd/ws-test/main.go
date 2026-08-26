@@ -57,6 +57,7 @@ func main() {
 	questID := flag.String("quest-id", "test-quest", "Quest ID")
 	provider := flag.String("provider", "claude", "AI provider")
 	task := flag.String("task", "", "Task description")
+	sessionID := flag.String("session-id", "", "ACP session ID to resume")
 	interactive := flag.Bool("i", false, "Interactive mode")
 	verbose := flag.Bool("v", false, "Verbose output (show raw messages)")
 	testMode := flag.Bool("test", false, "Test mode (run automated tests)")
@@ -131,14 +132,18 @@ func main() {
 	}()
 
 	// Send initial task if provided
-	if config.Task != "" {
+		if config.Task != "" {
 		fmt.Printf("📤 Sending: %s\n", config.Task)
+		data := map[string]interface{}{
+			"task": config.Task,
+		}
+		if *sessionID != "" {
+			data["session_id"] = *sessionID
+		}
 		msg := Message{
 			Command:   "start_task",
 			Timestamp: time.Now().UnixMilli(),
-			Data: map[string]interface{}{
-				"task": config.Task,
-			},
+			Data:      data,
 		}
 		if err := conn.WriteJSON(msg); err != nil {
 			log.Printf("❌ Send failed: %v", err)

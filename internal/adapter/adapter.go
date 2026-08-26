@@ -98,14 +98,16 @@ type Adapter interface {
 
 // Manager - Adapter manager
 type Manager struct {
-	adapter       Adapter
-	acpClient     *ACPClient // ACP client (if supported)
-	config        *CLIConfig
-	mode          AdapterMode // ACP or Text mode
-	customCLIPath string      // Custom CLI path
-	customCaps    []string    // Custom capabilities
-	forceACP      bool        // Force ACP mode
-	forceJSON     bool        // Force JSON stream mode
+	adapter         Adapter
+	acpClient       *ACPClient // ACP client (if supported)
+	config          *CLIConfig
+	mode            AdapterMode // ACP or Text mode
+	customCLIPath   string      // Custom CLI path
+	customCaps      []string    // Custom capabilities
+	forceACP        bool        // Force ACP mode
+	forceJSON       bool        // Force JSON stream mode
+	mcpServers      []MCPServer
+	resumeSessionID string
 }
 
 // AdapterMode - Adapter mode
@@ -344,7 +346,25 @@ func (m *Manager) Start() (*CLIProcess, error) {
 	}, nil
 }
 
-// CreateSession Create ACP session (ACP mode only)
+// SetMCPServers sets session-scoped MCP servers for the next session/new or session/load.
+func (m *Manager) SetMCPServers(servers []MCPServer) {
+	if servers == nil {
+		m.mcpServers = nil
+		return
+	}
+	cp := make([]MCPServer, len(servers))
+	copy(cp, servers)
+	m.mcpServers = cp
+}
+
+// SetResumeSessionID sets an ACP session id to try via session/load on CreateSession.
+func (m *Manager) SetResumeSessionID(sessionID string) {
+	m.resumeSessionID = strings.TrimSpace(sessionID)
+}
+
+// CreateSession creates or resumes an ACP session (ACP mode only).
+// If a resume id is set and the agent advertised loadSession, session/load is
+// tried first; failure falls back to session/new.
 func (m *Manager) CreateSession(cwd string) error {
 	if m.mode != ModeACP || m.acpClient == nil {
 		return nil
@@ -352,8 +372,52 @@ func (m *Manager) CreateSession(cwd string) error {
 	if cwd == "" && m.config != nil {
 		cwd = m.config.WorkDir
 	}
-	_, err := m.acpClient.NewSession(cwd, []interface{}{})
+	mcp := m.mcpServersForAgent()
+	resume := m.resumeSessionID
+	if resume != "" && m.acpClient.SupportsLoadSession() {
+		if err := m.acpClient.LoadSession(resume, cwd, mcp); err == nil {
+			return nil
+		} else {
+			util.DebugLog("[DEBUG] session/load failed, creating new session: %v", err)
+			m.acpClient.emitEvent(map[string]interface{}{
+				"type":    "warning",
+				"content": fmt.Sprintf("session/load failed (%s); starting a new session", err.Error()),
+			})
+		}
+	} else if resume != "" && !m.acpClient.SupportsLoadSession() {
+		m.acpClient.emitEvent(map[string]interface{}{
+			"type":    "warning",
+			"content": "agent does not support session/load; starting a new session",
+		})
+	}
+	_, err := m.acpClient.NewSession(cwd, mcp)
 	return err
+}
+
+func (m *Manager) mcpServersForAgent() []interface{} {
+	if m.acpClient == nil {
+		return MCPServersToACP(m.mcpServers)
+	}
+	filtered := make([]MCPServer, 0, len(m.mcpServers))
+	for _, s := range m.mcpServers {
+		kind := strings.ToLower(strings.TrimSpace(s.Type))
+		if kind == "http" && !m.acpClient.SupportsMCPHTTP() {
+			m.acpClient.emitEvent(map[string]interface{}{
+				"type":    "warning",
+				"content": fmt.Sprintf("skipping HTTP MCP server %q: agent did not advertise mcpCapabilities.http", s.Name),
+			})
+			continue
+		}
+		if kind == "sse" && !m.acpClient.SupportsMCPSSE() {
+			m.acpClient.emitEvent(map[string]interface{}{
+				"type":    "warning",
+				"content": fmt.Sprintf("skipping SSE MCP server %q: agent did not advertise mcpCapabilities.sse", s.Name),
+			})
+			continue
+		}
+		filtered = append(filtered, s)
+	}
+	return MCPServersToACP(filtered)
 }
 
 // WorkDir returns the adapter working directory.
@@ -1304,10 +1368,15 @@ func (a *GenericAdapter) GetCapabilities() []string {
 
 // SendACPPrompt Send prompt to ACP server
 func (m *Manager) SendACPPrompt(prompt string) error {
+	return m.SendACPPromptWith(prompt, nil)
+}
+
+// SendACPPromptWith sends an ACP prompt with optional ContentBlock attachments.
+func (m *Manager) SendACPPromptWith(prompt string, atts []PromptAttachment) error {
 	if m.mode != ModeACP || m.acpClient == nil {
 		return fmt.Errorf("ACP mode not enabled")
 	}
-	return m.acpClient.Prompt(prompt)
+	return m.acpClient.PromptWith(prompt, atts)
 }
 
 // GetMode GetCurrentMode

@@ -118,6 +118,10 @@ func TestACPWebSocketEndToEnd(t *testing.T) {
 	if health["provider"] != "copilot" {
 		t.Fatalf("health provider = %v, want copilot", health["provider"])
 	}
+
+	if got := readACPSessionID(tmp, "acp-e2e"); got != "sess-e2e" {
+		t.Fatalf("persisted session id = %q", got)
+	}
 }
 
 func waitForWSEvent(t *testing.T, conn *websocket.Conn, timeout time.Duration, match func(typ string, data map[string]interface{}) bool) bool {
@@ -141,4 +145,121 @@ func waitForWSEvent(t *testing.T, conn *websocket.Conn, timeout time.Duration, m
 		}
 	}
 	return false
+}
+
+func writeRecordingMockACP(t *testing.T, dir, initCaps string) (binPath, logPath string) {
+	t.Helper()
+	logPath = filepath.Join(dir, "acp.jsonl")
+	script := `#!/bin/bash
+LOG="` + logPath + `"
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> "$LOG"
+  id=$(echo "$line" | sed -n 's/.*"id":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -1)
+  if echo "$line" | grep -q '"initialize"'; then
+    echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"protocolVersion\":1,\"agentCapabilities\":` + initCaps + `}}"
+  elif echo "$line" | grep -q 'session/load'; then
+    echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{}}"
+  elif echo "$line" | grep -q 'session/new'; then
+    echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"sessionId\":\"sess-new\"}}"
+  elif echo "$line" | grep -q 'session/prompt'; then
+    text="hello"
+    if echo "$line" | grep -q '"type":"image"'; then
+      text="got-image"
+    fi
+    echo "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"sess-resume\",\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"$text\"}}}"
+    echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"stopReason\":\"end_turn\"}}"
+  fi
+done
+`
+	binPath = filepath.Join(dir, "copilot")
+	if err := os.WriteFile(binPath, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	return binPath, logPath
+}
+
+func startACPTestServer(t *testing.T, tmp, mockPath, taskID string) (*httptest.Server, *WebSocketServer) {
+	t.Helper()
+	stateMgr := state.NewManager(tmp)
+	if err := stateMgr.CreateTask(taskID, "copilot"); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	cli := adapter.NewAdapter("copilot", tmp)
+	cli.SetCLIPath(mockPath)
+	srv := NewWebSocketServer(stateMgr, taskID, cli, tmp)
+	srv.wg.Add(2)
+	go srv.broadcastHandler()
+	go srv.errorHandler()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", srv.handleWebSocket)
+	mux.HandleFunc("/health", srv.handleHealth)
+	hs := httptest.NewServer(mux)
+	return hs, srv
+}
+
+func TestACPWebSocketResumeAttachmentsAndMCP(t *testing.T) {
+	tmp := t.TempDir()
+	mockPath, logPath := writeRecordingMockACP(t, tmp, `{"loadSession":true,"promptCapabilities":{"image":true},"mcpCapabilities":{"http":true}}`)
+	hs, srv := startACPTestServer(t, tmp, mockPath, "acp-resume")
+	defer hs.Close()
+	defer srv.Stop()
+
+	wsURL := "ws" + strings.TrimPrefix(hs.URL, "http") + "/ws?device=e2e"
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	if err := conn.WriteJSON(map[string]interface{}{
+		"command": "start_task",
+		"data": map[string]interface{}{
+			"task":       "look at this",
+			"session_id": "sess-resume",
+			"attachments": []map[string]interface{}{
+				{"type": "image", "mime_type": "image/png", "data": "aGVsbG8="},
+			},
+			"mcp_servers": []map[string]interface{}{
+				{"name": "fs", "command": "npx", "args": []string{"mcp-fs"}},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("start_task: %v", err)
+	}
+
+	sawImage := waitForWSEvent(t, conn, 5*time.Second, func(typ string, data map[string]interface{}) bool {
+		return typ == "chunk" && data["content"] == "got-image"
+	})
+	if !sawImage {
+		t.Fatal("did not receive image-ack ACP chunk over WebSocket")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var log string
+	for time.Now().Before(deadline) {
+		raw, err := os.ReadFile(logPath)
+		if err == nil {
+			log = string(raw)
+			if strings.Contains(log, `"session/load"`) && strings.Contains(log, "sess-resume") &&
+				strings.Contains(log, "mcp-fs") && strings.Contains(log, `"image/png"`) {
+				break
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !strings.Contains(log, `"session/load"`) {
+		t.Fatalf("expected session/load: %s", log)
+	}
+	if strings.Contains(log, `"session/new"`) {
+		t.Fatalf("did not expect session/new: %s", log)
+	}
+	if !strings.Contains(log, "mcp-fs") {
+		t.Fatalf("expected mcp server on session/load: %s", log)
+	}
+	if !strings.Contains(log, `"image/png"`) || !strings.Contains(log, "aGVsbG8=") {
+		t.Fatalf("expected image ContentBlock: %s", log)
+	}
+	if got := readACPSessionID(tmp, "acp-resume"); got != "sess-resume" {
+		t.Fatalf("persisted session id = %q", got)
+	}
 }

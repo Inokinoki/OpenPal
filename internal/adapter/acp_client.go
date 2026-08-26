@@ -106,6 +106,17 @@ type ACPClient struct {
 	permissions []acpPendingPermission
 	loopDone    chan struct{}
 	cancelLoop  context.CancelFunc
+
+	caps acpAgentCapabilities
+}
+
+type acpAgentCapabilities struct {
+	loadSession bool
+	promptImage bool
+	promptAudio bool
+	embeddedCtx bool
+	mcpHTTP     bool
+	mcpSSE      bool
 }
 
 // NewACPClient Create ACP client for providers that speak ACP natively
@@ -203,8 +214,74 @@ func (c *ACPClient) Start() error {
 		return fmt.Errorf("ACP initialize failed (provider=%s, cmd=%s): %w", c.provider, c.cmdName, err)
 	}
 
-	util.DebugLog("[DEBUG] ACP initialized: %+v", initResult)
+	caps := parseAgentCapabilities(initResult)
+	c.mu.Lock()
+	c.caps = caps
+	c.mu.Unlock()
+	util.DebugLog("[DEBUG] ACP initialized: %+v caps=%+v", initResult, caps)
 	return nil
+}
+
+func parseAgentCapabilities(result map[string]interface{}) acpAgentCapabilities {
+	var caps acpAgentCapabilities
+	if result == nil {
+		return caps
+	}
+	raw, _ := result["agentCapabilities"].(map[string]interface{})
+	if raw == nil {
+		return caps
+	}
+	caps.loadSession = jsonBool(raw["loadSession"])
+	if prompt, ok := raw["promptCapabilities"].(map[string]interface{}); ok {
+		caps.promptImage = jsonBool(prompt["image"])
+		caps.promptAudio = jsonBool(prompt["audio"])
+		caps.embeddedCtx = jsonBool(prompt["embeddedContext"])
+	}
+	if mcp, ok := raw["mcpCapabilities"].(map[string]interface{}); ok {
+		caps.mcpHTTP = jsonBool(mcp["http"])
+		caps.mcpSSE = jsonBool(mcp["sse"])
+	}
+	return caps
+}
+
+func jsonBool(v interface{}) bool {
+	b, _ := v.(bool)
+	return b
+}
+
+// SupportsLoadSession reports whether initialize advertised agentCapabilities.loadSession.
+func (c *ACPClient) SupportsLoadSession() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.caps.loadSession
+}
+
+// SupportsPromptImage reports whether the agent accepts image ContentBlocks.
+func (c *ACPClient) SupportsPromptImage() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.caps.promptImage
+}
+
+// SupportsMCPHTTP reports whether the agent accepts HTTP MCP servers.
+func (c *ACPClient) SupportsMCPHTTP() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.caps.mcpHTTP
+}
+
+// SupportsMCPSSE reports whether the agent accepts SSE MCP servers.
+func (c *ACPClient) SupportsMCPSSE() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.caps.mcpSSE
+}
+
+// SupportsEmbeddedContext reports whether the agent accepts resource ContentBlocks.
+func (c *ACPClient) SupportsEmbeddedContext() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.caps.embeddedCtx
 }
 
 func (c *ACPClient) spawnLocked() error {
@@ -291,11 +368,14 @@ func (c *ACPClient) NewSession(cwd string, mcpServers []interface{}) (string, er
 }
 
 // LoadSession resumes an existing ACP session when the agent advertises loadSession.
-func (c *ACPClient) LoadSession(sessionID, cwd string) error {
+func (c *ACPClient) LoadSession(sessionID, cwd string, mcpServers []interface{}) error {
+	if mcpServers == nil {
+		mcpServers = []interface{}{}
+	}
 	params := map[string]interface{}{
 		"sessionId":  sessionID,
 		"cwd":        cwd,
-		"mcpServers": []interface{}{},
+		"mcpServers": mcpServers,
 	}
 	var result map[string]interface{}
 	if err := c.sendRequest("session/load", params, &result, acpSessionTimeout); err != nil {
@@ -304,24 +384,35 @@ func (c *ACPClient) LoadSession(sessionID, cwd string) error {
 	c.mu.Lock()
 	c.sessionID = sessionID
 	c.mu.Unlock()
+	util.DebugLog("[DEBUG] LoadSession restored: %s", sessionID)
 	return nil
 }
 
-// Prompt sends session/prompt. Updates stream via the notification handler; this
-// call returns once the request is written so the WebSocket loop stays responsive.
+// Prompt sends session/prompt with a single text block.
 func (c *ACPClient) Prompt(prompt string) error {
+	return c.PromptWith(prompt, nil)
+}
+
+// PromptWith sends session/prompt with text plus optional ContentBlocks.
+// Updates stream via the notification handler; this call returns once the
+// request is written so the WebSocket loop stays responsive.
+func (c *ACPClient) PromptWith(prompt string, atts []PromptAttachment) error {
 	c.mu.Lock()
 	sessionID := c.sessionID
+	workDir := c.workDir
 	c.mu.Unlock()
 	if sessionID == "" {
 		return fmt.Errorf("no active session")
 	}
 
+	blocks, err := BuildPromptBlocks(prompt, atts, workDir)
+	if err != nil {
+		return err
+	}
+
 	params := map[string]interface{}{
 		"sessionId": sessionID,
-		"prompt": []map[string]string{
-			{"type": "text", "text": prompt},
-		},
+		"prompt":    blocks,
 	}
 
 	go func() {
