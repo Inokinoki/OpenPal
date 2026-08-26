@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -150,13 +151,14 @@ func waitForWSEvent(t *testing.T, conn *websocket.Conn, timeout time.Duration, m
 func writeRecordingMockACP(t *testing.T, dir, initCaps string) (binPath, logPath string) {
 	t.Helper()
 	logPath = filepath.Join(dir, "acp.jsonl")
-	script := `#!/bin/bash
-LOG="` + logPath + `"
+	script := fmt.Sprintf(`#!/bin/bash
+LOG=%q
+CAPS=%q
 while IFS= read -r line; do
-  printf '%s\n' "$line" >> "$LOG"
+  printf '%%s\n' "$line" >> "$LOG"
   id=$(echo "$line" | sed -n 's/.*"id":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -1)
   if echo "$line" | grep -q '"initialize"'; then
-    echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"protocolVersion\":1,\"agentCapabilities\":` + initCaps + `}}"
+    echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"protocolVersion\":1,\"agentCapabilities\":$CAPS}}"
   elif echo "$line" | grep -q 'session/load'; then
     echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{}}"
   elif echo "$line" | grep -q 'session/new'; then
@@ -170,7 +172,7 @@ while IFS= read -r line; do
     echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"stopReason\":\"end_turn\"}}"
   fi
 done
-`
+`, logPath, initCaps)
 	binPath = filepath.Join(dir, "copilot")
 	if err := os.WriteFile(binPath, []byte(script), 0755); err != nil {
 		t.Fatal(err)

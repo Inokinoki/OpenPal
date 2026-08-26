@@ -349,8 +349,8 @@ func (s *WebSocketServer) Stop() error {
 	// 1. Cancel context to signal all goroutines
 	s.cancel()
 
-	// 2. Close input queue
-	close(s.inputQueue)
+	// Do not close inputQueue here: listen goroutines may still be sending.
+	// processInputQueue exits on ctx.Done().
 
 	// 3. Close all client connections in parallel
 	s.mu.Lock()

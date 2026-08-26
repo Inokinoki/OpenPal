@@ -250,11 +250,12 @@ func recordingACPMock(t *testing.T, initCaps string) (binPath, logPath string) {
 	logPath = filepath.Join(dir, "acp.jsonl")
 	script := fmt.Sprintf(`#!/bin/bash
 LOG=%q
+CAPS=%q
 while IFS= read -r line; do
   printf '%%s\n' "$line" >> "$LOG"
   id=$(echo "$line" | sed -n 's/.*"id":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -1)
   if echo "$line" | grep -q '"initialize"'; then
-    echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"protocolVersion\":1,\"agentCapabilities\":%s}}"
+    echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"protocolVersion\":1,\"agentCapabilities\":$CAPS}}"
   elif echo "$line" | grep -q 'session/load'; then
     echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{}}"
   elif echo "$line" | grep -q 'session/new'; then
